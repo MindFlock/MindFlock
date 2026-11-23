@@ -1,5 +1,5 @@
-/** Settings → Disk cleanup's hub line (components/settings/screens/
- * Cleanup.tsx): how much the hub holds, and one button that removes every
+/** Settings → Disk cleanup's Shared files line (components/settings/screens/
+ * Cleanup.tsx): how much Shared files holds, and one button that removes every
  * unpinned item now (POST /api/hub/clear) — asked first in-page. */
 
 import { useState } from "react";
@@ -21,10 +21,10 @@ export function HubCleanup() {
     setBusy(true);
     try {
       const r = await api<{ removed: number; freed: number }>("/api/hub/clear", { method: "POST" });
-      toast("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " from the hub — " + humanSize(r.freed) + " freed");
+      toast("Removed " + r.removed + (r.removed === 1 ? " item" : " items") + " from Shared files — " + humanSize(r.freed) + " freed");
       refreshHub();
     } catch (err) {
-      toast("Couldn't clear the hub: " + errMsg(err));
+      toast("Couldn't clear Shared files: " + errMsg(err));
     } finally {
       setBusy(false);
       setAsking(false);
@@ -32,7 +32,7 @@ export function HubCleanup() {
   };
   return (
     <div className="set-row" id="cleanup-hub">
-      <span className="set-label">Hub</span>
+      <span className="set-label">Shared files</span>
       <span className="cleanup-summary">
         {l.count ? (
           <>
@@ -40,12 +40,12 @@ export function HubCleanup() {
             {pinned ? " (" + pinned + " pinned)" : ""} — unpinned items go by themselves {l.keep_days} days after their last use.
           </>
         ) : (
-          "The hub is empty."
+          "Nothing in Shared files."
         )}
       </span>
       <span className="test-row">
         <button type="button" className="test-btn" onClick={() => useHubUi.getState().setOpen(true)}>
-          Open the hub
+          Open Shared files
         </button>
         {unpinned > 0 && (
           <button type="button" className="test-btn" disabled={busy} onClick={() => setAsking(true)}>

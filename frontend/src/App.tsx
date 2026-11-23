@@ -357,7 +357,7 @@ export default function App() {
       <MemoryConfirm />
       {/* The people on a session talking (lib/chat.ts): pops up by itself. */}
       <ChatPanel />
-      {/* The hub drawer + its Send to session… dialog (components/hub). */}
+      {/* The Shared files drawer (its Send to session… is a step inside it; components/hub). */}
       <HubPanel />
       <CommandPalette host={host} />
       <ShortcutsSheet />

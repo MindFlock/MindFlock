@@ -1,12 +1,17 @@
-/** The hub (backend core/hub.py, docs/web-ui.md "Hub"): one shared place
- * for files, pictures and snippets every session can use. An ITEM has a
- * REFERENCE — `hub:k7m2` — that works in any prompt sent through MindFlock
- * (the server expands it to the item's path, name and kind) and in an agent's
- * terminal (a paste is expanded here, through /api/hub/expand).
+/** Shared files (backend core/hub.py, docs/web-ui.md "Shared files"): one
+ * shared place for files, pictures and snippets every session can use. An
+ * ITEM has a CODE — `file:k7m2` — that works in any prompt sent through
+ * MindFlock (the server expands it to the item's path, name and kind) and in
+ * an agent's terminal (a paste is expanded here, through /api/hub/expand).
+ * The first codes read `hub:k7m2`; they keep working everywhere.
+ *
+ * People read "Shared files"; the code keeps its first name, hub, wherever
+ * it is stored or called (the API, hub.json, the MCP tool, these modules).
  *
  * This module is the panel's, the composers' and the rail's shared half: the
- * list query, the panel's open state, every action (add, copy, send,
- * remove with Undo) and the words they say. */
+ * list query, the panel's open state and selection, every action (add, copy,
+ * send, pin and remove — one item or several — with Undo) and the words they
+ * say. */
 
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -50,7 +55,8 @@ export interface HubList {
   root: string;
 }
 
-export { HUB_MIME, REF_RE } from "./hubRef";
+export { HUB_MIME, REF_RE, CODE_PREFIXES, dragItems, setDragItems } from "./hubRef";
+import { setDragItems } from "./hubRef";
 /** How long Undo stays offered after a remove (the server keeps it 10 min). */
 const UNDO_MS = 10000;
 
@@ -73,7 +79,7 @@ export function refreshHub(): void {
 }
 
 let bridged = false;
-/** Refetch the list whenever the server says the hub changed (any device
+/** Refetch the list whenever the server says shared files changed (any device
  * tab, the CLI, an agent's put). */
 export function bridgeHubEvents(): void {
   if (bridged) return;
@@ -86,7 +92,7 @@ export function bridgeHubEvents(): void {
 // --------------------------------------------------------------------------
 // The panel, the Send dialog and the composer hand-off
 // --------------------------------------------------------------------------
-/** One line the hub says, at the TOP of the window (never over a session's
+/** One line Shared files says, at the TOP of the window (never over a session's
  * prompt line, where the bottom toasts sit), with up to two actions. */
 export interface HubNotice {
   text: string;
@@ -110,9 +116,14 @@ interface HubUi {
   open: boolean;
   setOpen(v: boolean): void;
   toggle(): void;
-  /** The item "Send to session…" is open for. */
-  sending: HubItem | null;
-  openSend(item: HubItem | null): void;
+  /** The items "Send to session…" is open for: the drawer shows its send
+   * step (with Back) instead of the list — one surface, never a dialog the
+   * drawer could cover. */
+  sending: HubItem[] | null;
+  openSend(items: HubItem | HubItem[] | null): void;
+  /** The ids ticked in the list (the selection bar acts on them). */
+  selected: string[];
+  setSelected(ids: string[]): void;
   /** Text to put into a session's Thread composer (`n` bumps per request). */
   insert: { title: string; text: string; n: number } | null;
   insertInto(title: string, text: string): void;
@@ -123,18 +134,25 @@ export const useHubUi = create<HubUi>((set, get) => ({
   notice: null,
   problems: [],
   open: false,
+  // Closing forgets the send step and the selection: the drawer opens on
+  // the list, nothing ticked, every time.
   setOpen: (v) => {
     if (v) markHubSeen();
-    set({ open: v });
+    set(v ? { open: true } : { open: false, sending: null, selected: [] });
   },
-  toggle: () => {
-    if (!get().open) markHubSeen();
-    set({ open: !get().open });
-  },
+  toggle: () => get().setOpen(!get().open),
   sending: null,
   // Opening Send to session… retires a "Put in X's prompt" notice: two
-  // live ways to send the same item is how it gets sent twice.
-  openSend: (item) => set(item ? { sending: item, notice: null } : { sending: null }),
+  // live ways to send the same item is how it gets sent twice. It opens the
+  // drawer too (the step lives there).
+  openSend: (items) => {
+    const list = items ? (Array.isArray(items) ? items : [items]) : [];
+    if (!list.length) return set({ sending: null });
+    if (!get().open) markHubSeen();
+    set({ sending: list, notice: null, open: true });
+  },
+  selected: [],
+  setSelected: (ids) => set({ selected: ids }),
   insert: null,
   insertInto: (title, text) => set({ insert: { title, text, n: ++_n } }),
 }));
@@ -158,7 +176,7 @@ export function dropProblem(id: number): void {
   useHubUi.setState((s) => ({ problems: s.problems.filter((p) => p.id !== id) }));
 }
 
-/** Briefly ring the session a hub item just went to — its pane and its rail
+/** Briefly ring the session a shared file just went to — its pane and its rail
  * row — so you see where it landed. */
 export function flashTarget(title: string): void {
   if (typeof document === "undefined") return;
@@ -173,7 +191,7 @@ export function flashTarget(title: string): void {
 }
 
 // --------------------------------------------------------------------------
-// What's new since you last looked (the top-bar count)
+// What's new since you last looked (the ⋯ menu's dot and its row's count)
 // --------------------------------------------------------------------------
 const SEEN_KEY = "mf_hub_seen";
 
@@ -193,7 +211,7 @@ export function markHubSeen(now = Date.now() / 1000): void {
   }
 }
 
-/** Items an AGENT or your PHONE added since you last opened the hub — the
+/** Items an AGENT or your PHONE added since you last opened Shared files — the
  * ones you haven't seen. What you added yourself is never "new". */
 export function newCount(items: Pick<HubItem, "by" | "added">[], seen = hubSeen()): number {
   return items.filter((i) => i.by !== "you" && i.added > seen).length;
@@ -255,19 +273,23 @@ export function usageLine(l: Pick<HubList, "count" | "used" | "quota">): string 
   );
 }
 
-/** The hub: prefix the composer picker answers: the token the caret is in,
- * or null. `hub:` alone (or with the first letters) counts. */
-export function refTokenAt(text: string, caret: number): { start: number; query: string } | null {
+/** The code prefix the composer picker answers — `file:` (or the first
+ * codes' `hub:`) — at the token the caret is in, or null. The prefix alone
+ * (or with the first letters) counts; "file: " with a space after it is
+ * prose, not a code, so the picker closes. → where the token starts, the
+ * prefix as typed and what follows it. */
+export function refTokenAt(text: string, caret: number): { start: number; prefix: string; query: string } | null {
   const before = text.slice(0, caret);
-  const m = before.match(/(^|[\s([{"'`])hub:([A-Za-z0-9._ -]{0,40})$/i);
+  const m = before.match(/(^|[\s([{"'`])(file:|hub:)((?:[A-Za-z0-9._-][A-Za-z0-9._ -]{0,39})?)$/i);
   if (!m) return null;
-  const query = m[2];
+  const prefix = m[2];
+  const query = m[3];
   if (/\s\s/.test(query) || query.length > 40) return null;
-  return { start: caret - query.length - 4, query };
+  return { start: caret - query.length - prefix.length, prefix, query };
 }
 
-/** Items matching what was typed after `hub:` — by id prefix first, then by
- * name. */
+/** Items matching what was typed after the prefix — by id prefix first, then
+ * by name. */
 export function matchItems(items: HubItem[], query: string, most = 8): HubItem[] {
   const q = query.trim().toLowerCase();
   if (!q) return items.slice(0, most);
@@ -359,7 +381,7 @@ export function addedToast(r: AddResult): void {
         ? { actions: [{ label: "Put in " + displayName(here) + "'s prompt", run: () => void putInPrompt(here, it, "", { focus: true }) }] }
         : {}
     );
-  } else if (r.added.length > 1) say("Added " + r.added.length + " items to the hub");
+  } else if (r.added.length > 1) say("Added " + r.added.length + " items to Shared files");
   for (const x of r.refused.filter((x) => !x.secret)) {
     addProblem("Couldn't add " + x.file.name + ": " + x.error, x.raiseTo);
   }
@@ -378,14 +400,14 @@ export async function raiseItemLimit(mb: number): Promise<boolean> {
   }
 }
 
-/** Rebuild the hub's list from the folders on disk (hub_broken). */
+/** Rebuild the list of shared files from the folders on disk (hub_broken). */
 export async function rebuildHub(): Promise<void> {
   try {
     const r = await api<{ items: number; restored: number; read_again: number }>("/api/hub/rebuild", { method: "POST" });
     refreshHub();
-    say("Rebuilt the hub: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
+    say("Rebuilt the list: " + r.items + (r.items === 1 ? " item" : " items") + " — nothing was lost");
   } catch (err) {
-    say("Couldn't rebuild the hub: " + errMsg(err), { error: true });
+    say("Couldn't rebuild the list: " + errMsg(err), { error: true });
   }
 }
 
@@ -467,31 +489,47 @@ export async function openQueue(title: string): Promise<void> {
   selectSession(title);
 }
 
-/** Point a session's agent at an item: its code is typed into the agent's
- * prompt WITHOUT pressing Enter (the server expands it to the path, name and
- * kind) — the person adds their words there. With `message`, it is sent:
- * "<message> <code>" (queued when the session is busy: "Open queue"). A
- * session on a dialog gets it in its Thread box instead. `focus`: close the
- * drawer and bring that session forward (the person types next). */
+/** The codes of several items, as one line ("file:k7m2 file:zz11"). */
+export function codesOf(items: Pick<HubItem, "ref">[]): string {
+  return items.map((i) => i.ref).join(" ");
+}
+
+/** What a sentence calls one item or several: its name, or "3 items". */
+export function itemsWord(items: Pick<HubItem, "name">[]): string {
+  return items.length === 1 ? items[0].name : items.length + " items";
+}
+
+/** Point a session's agent at one item or several: their codes are typed
+ * into the agent's prompt WITHOUT pressing Enter (the server expands each to
+ * its path, name and kind) — the person adds their words there. With
+ * `message`, ONE message is sent: "<message> <codes>" (queued when the
+ * session is busy: "Open queue"). A session on a dialog gets it in its
+ * Thread box instead. `focus`: close the drawer and bring that session
+ * forward (the person types next). */
 export async function putInPrompt(
   title: string,
-  it: Pick<HubItem, "ref" | "name">,
+  its: Pick<HubItem, "ref" | "name"> | Pick<HubItem, "ref" | "name">[],
   message = "",
   opts: { focus?: boolean } = {}
 ): Promise<boolean> {
+  const list = Array.isArray(its) ? its : [its];
+  if (!list.length) return false;
+  const codes = codesOf(list);
   const msg = message.trim();
-  const text = msg ? msg + " " + it.ref : it.ref + " ";
+  const text = msg ? msg + " " + codes : codes + " ";
   const name = displayName(title);
+  const what = list.length === 1 ? list[0].ref : list.length + " codes";
   try {
-    const r = await instApi<{ queued?: boolean }>(title, "/send", {
+    const r = await instApi<{ queued?: boolean; hub_note?: string }>(title, "/send", {
       json: msg ? { text, dialog_safe: true } : { text, submit: false, dialog_safe: true },
     });
+    const note = r?.hub_note ? " (" + r.hub_note + ")" : "";
     if (msg && r?.queued)
-      say(name + " is busy — your message with " + it.ref + " is queued; it gets it when it's free", {
+      say(name + " is busy — your message with " + what + " is queued; it gets it when it's free" + note, {
         actions: [{ label: "Open queue", run: () => void openQueue(title) }],
       });
-    else if (msg) say("Sent to " + name + " with " + it.ref);
-    else say(it.ref + " is in " + name + "'s prompt — add your words there and press Enter");
+    else if (msg) say("Sent to " + name + " with " + what + note);
+    else say(what + (list.length === 1 ? " is" : " are") + " in " + name + "'s prompt — add your words there and press Enter" + note);
     if (opts.focus) {
       // The person types next, in that session: the drawer would cover it.
       useHubUi.getState().setOpen(false);
@@ -506,10 +544,10 @@ export async function putInPrompt(
       useUi.getState().threadOpen(title);
       if (opts.focus) useHubUi.getState().setOpen(false);
       flashTarget(title);
-      say(name + " is answering a question — " + it.ref + " is in its Thread box; send it from there");
+      say(name + " is answering a question — " + what + (list.length === 1 ? " is" : " are") + " in its Thread box; send it from there");
       return true;
     }
-    say("Couldn't send " + it.ref + " to " + name + ": " + errMsg(err), { error: true });
+    say("Couldn't send " + what + " to " + name + ": " + errMsg(err), { error: true });
     return false;
   }
 }
@@ -539,7 +577,7 @@ export async function copyInto(
     try {
       await instApi(title, "/send", {
         json: {
-          text: "I saved " + it.name + " in your project folder at " + r.path + " (from the MindFlock hub; you can read it there).",
+          text: "I saved " + it.name + " in your project folder at " + r.path + " (from MindFlock's Shared files; you can read it there).",
           dialog_safe: true,
         },
       });
@@ -585,7 +623,7 @@ export async function removeItem(it: HubItem): Promise<void> {
     return;
   }
   refreshHub();
-  say("Removed " + it.name + " from the hub", {
+  say("Removed " + it.name + " from Shared files", {
     actions: [
       {
         label: "Undo",
@@ -603,3 +641,163 @@ export async function removeItem(it: HubItem): Promise<void> {
   });
 }
 
+// --------------------------------------------------------------------------
+// Several at once (the selection bar): one request, answered per item
+// --------------------------------------------------------------------------
+export type BatchAction = "pin" | "unpin" | "remove" | "restore" | "copy";
+
+export interface BatchRow {
+  id: string;
+  ref?: string;
+  ok: boolean;
+  error?: string;
+  code?: string;
+  path?: string;
+  wanted?: string;
+  item?: HubItem;
+}
+
+export interface BatchResult {
+  action: BatchAction;
+  results: BatchRow[];
+  done: number;
+  failed: number;
+}
+
+/** POST /api/hub/batch: the server checks and does each item on its own and
+ * answers per item — never all-or-nothing, never a silent skip. */
+export async function batch(action: BatchAction, items: Pick<HubItem, "id">[], session?: string): Promise<BatchResult> {
+  const r = await api<BatchResult>("/api/hub/batch", {
+    json: { action, ids: items.map((i) => i.id), ...(session ? { session } : {}) },
+  });
+  refreshHub();
+  return r;
+}
+
+/** The items a batch could not do, said IN the drawer (one problem per item,
+ * with the server's reason) — a partial batch is never only a passing line. */
+export function batchProblems(r: BatchResult, items: Pick<HubItem, "id" | "name">[], verb: string): string[] {
+  const out: string[] = [];
+  for (const row of r.results.filter((x) => !x.ok)) {
+    const it = items.find((i) => i.id === row.id);
+    const line = "Couldn't " + verb + " " + (it ? it.name : row.ref || row.id) + ": " + (row.error || "error");
+    out.push(line);
+    addProblem(line);
+  }
+  return out;
+}
+
+/** "Pinned 3 items" / "Pinned 2 of 3 — why 1 couldn't be is in Shared files". */
+export function batchLine(done: number, asked: number, past: string): string {
+  if (done === asked) return past + " " + (asked === 1 ? "1 item" : asked + " items");
+  return past + " " + done + " of " + asked + " — why " + (asked - done) + " couldn't be is in Shared files";
+}
+
+/** Pin or unpin several. */
+export async function pinItems(items: HubItem[], pinned: boolean): Promise<BatchResult | null> {
+  if (!items.length) return null;
+  try {
+    const r = await batch(pinned ? "pin" : "unpin", items);
+    batchProblems(r, items, pinned ? "pin" : "unpin");
+    say(batchLine(r.done, items.length, pinned ? "Pinned" : "Unpinned"), { error: r.failed > 0 && r.done === 0 });
+    return r;
+  } catch (err) {
+    say("Couldn't " + (pinned ? "pin" : "unpin") + " them: " + errMsg(err), { error: true });
+    return null;
+  }
+}
+
+/** Remove several, with one Undo that puts every one of them back. */
+export async function removeItems(items: HubItem[]): Promise<BatchResult | null> {
+  if (!items.length) return null;
+  let r: BatchResult;
+  try {
+    r = await batch("remove", items);
+  } catch (err) {
+    say("Couldn't remove them: " + errMsg(err), { error: true });
+    return null;
+  }
+  batchProblems(r, items, "remove");
+  const gone = items.filter((i) => r.results.some((x) => x.id === i.id && x.ok));
+  if (!gone.length) {
+    say("Nothing was removed", { error: true });
+    return r;
+  }
+  say(batchLine(gone.length, items.length, "Removed") + " from Shared files", {
+    actions: [
+      {
+        label: "Undo",
+        run: () => {
+          void batch("restore", gone)
+            .then((back) => {
+              batchProblems(back, gone, "put back");
+              say(batchLine(back.done, gone.length, "Put back"), { error: back.done === 0 });
+            })
+            .catch((err) => say("Couldn't put them back: " + errMsg(err), { error: true }));
+        },
+      },
+    ],
+    ms: UNDO_MS,
+  });
+  return r;
+}
+
+/** Copy the codes of several items, one line ("file:k7m2 file:zz11"). */
+export async function copyRefs(items: HubItem[]): Promise<void> {
+  if (items.length === 1) return copyRef(items[0]);
+  const codes = codesOf(items);
+  const ok = await copyText(codes);
+  say(ok ? items.length + " codes copied to clipboard — paste them into any prompt or terminal" : "Couldn't copy — the codes are " + codes, {
+    error: !ok,
+  });
+}
+
+/** Save a copy of several items in a session's project folder, each at
+ * hub/<name> or the next free path beside it (never over a file), then —
+ * with `tell` — ONE line telling that session's agent where they all are. */
+export async function copyIntoMany(title: string, items: HubItem[], tell: boolean): Promise<BatchResult> {
+  const r = await batch("copy", items, title);
+  const name = displayName(title);
+  batchProblems(r, items, "copy");
+  const saved = r.results.filter((x) => x.ok && x.path);
+  let told = false;
+  if (tell && saved.length) {
+    const where = saved
+      .map((x) => {
+        const it = items.find((i) => i.id === x.id);
+        return (it ? it.name + " at " : "") + x.path;
+      })
+      .join(", ");
+    try {
+      await instApi(title, "/send", {
+        json: {
+          text: "I saved " + (saved.length === 1 ? "a file" : saved.length + " files") + " in your project folder: " + where + " (from MindFlock's Shared files; you can read them there).",
+          dialog_safe: true,
+        },
+      });
+      told = true;
+    } catch {
+      told = false;
+    }
+  }
+  if (saved.length) flashTarget(title);
+  say(
+    batchLine(saved.length, items.length, "Saved copies of") +
+      " in " + name + "'s folder" +
+      (tell && saved.length ? (told ? " — and told " + name : " — couldn't tell " + name + " (it may be offline)") : ""),
+    { error: !saved.length }
+  );
+  return r;
+}
+
+/** A drag of one card: the whole selection when that card is in it. */
+export function dragSet(it: HubItem, all: HubItem[], selected: string[]): HubItem[] {
+  if (!selected.includes(it.id)) return [it];
+  const sel = all.filter((i) => selected.includes(i.id));
+  return sel.length ? sel : [it];
+}
+
+/** Put a drag's items on the dataTransfer (see hubRef.setDragItems). */
+export function startDrag(dt: DataTransfer, items: HubItem[]): void {
+  setDragItems(dt, items);
+}

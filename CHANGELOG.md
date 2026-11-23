@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Several shared files at once.** Each item in Shared files has a
+  checkbox (shown on hover or focus, on every item once one is ticked;
+  Shift+click ticks a range; Select all — or Ctrl/⌘+A — ticks what the
+  filter shows). A selection bar sends them all to a session in **one**
+  message (or saves copies in its folder, each at `hub/<name>` or the next
+  free name, never over a file), puts them in the focused session's prompt,
+  copies their codes, pins / unpins them (a mixed selection says **Pin 2** ·
+  **Unpin 1**), or removes them after one confirm that names the count, with
+  one **Undo** for all. Dragging a ticked item carries the whole selection
+  onto a session's row, message box or terminal. The server takes the batch
+  in one request, `POST /api/hub/batch`, checking each item as its one-item
+  route does and answering per item; what could not be done is listed in
+  the drawer with the reason, never skipped silently. On the phone, Sessions
+  → Shared files has a tick per row and **Add N to message**.
+
+### Changed
+
+- **The Hub is now called Shared files, and lives in the top bar's ⋯
+  menu.** The standing top-bar button is gone; ⋯ is always there with
+  **Shared files** as its first row (Alt+H and the palette's "Shared files…"
+  still open it — "hub" still finds it), and when an agent or your phone
+  added something since you last looked, ⋯ carries a small calm count in the
+  accent. One vocabulary in the drawer, notices, tooltips, the composers'
+  paperclip and picker, Disk cleanup, the keyboard help, the phone page, the
+  MCP tool's description and the CLI's help. The tool keeps its name `hub`,
+  as do the API (`/api/hub`), the `hub.*` settings, `hub.json` and the
+  folders, so existing installs, other devices and agents keep working.
+- **Codes read `file:k7m2`.** New and existing items show the `file:` form;
+  the first `hub:k7m2` codes keep working everywhere a code is read — sent
+  prompts, the queue, a terminal paste, the phone, the MCP tool, the CLI —
+  for good. A `file:` word that cannot be a code (`file:line`) is left
+  alone and never reported as unknown; "file: " with a space is prose and
+  does not open the picker. The line an agent gets now reads `file:k7m2
+  (MindFlock shared file: …)`; a prompt already expanded the old way is not
+  expanded twice.
+
+### Fixed
+
+- **Send to session… no longer hides under the drawer.** It was a dialog in
+  the middle of the window that the Shared files drawer covered — at 1100 px
+  and narrower its own Send and Cancel buttons were under the drawer. It is
+  now a step inside the drawer (the content swaps to the send form, with
+  **← Back** / Esc), one surface at every width.
+
 ## [0.14.27] - 2026-11-23
 
 ### Added

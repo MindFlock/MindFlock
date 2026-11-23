@@ -179,7 +179,7 @@ export function Cleanup({ active }: ScreenProps) {
       onRemove={(it, ok) => void remove(it, ok)}
       onCancel={() => setAsking(null)}
     />
-    {/* The hub's own line (components/hub/HubCleanup). */}
+    {/* Shared files' own line (components/hub/HubCleanup). */}
     <HubCleanup />
     </>
   );

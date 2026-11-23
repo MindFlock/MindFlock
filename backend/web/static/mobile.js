@@ -2325,8 +2325,8 @@
       // later: a TUI like claude treats a rapid burst as a paste, and a \r
       // inside a paste becomes a newline in its input box instead of a
       // submit. The gap ends the paste burst so the Enter actually sends.
-      // A hub reference (hub:k7m2) goes in expanded: the agent gets the
-      // item's path, name and kind (HUB section).
+      // A shared-file code (file:k7m2, or an old hub:k7m2) goes in
+      // expanded: the agent gets the item's path, name and kind (HUB section).
       hubAttached = {};
       if (HUB_REF_RE.test(text) && hubHere()) {
         hubExpand(text).then(function (typed) {
@@ -2365,21 +2365,23 @@
   });
 
   // --- HUB -----------------------------------------------------------------
-  // The hub (backend core/hub.py; docs/web-ui.md "Hub"): one shared place
-  // per MindFlock home for files, pictures and snippets every session can use.
-  // 📎 beside the compose box: pick a photo or file (the phone's own picker:
-  // library, camera or files) → it goes into the hub (source=phone) and its
-  // reference (hub:k7m2) into the message → Send. A message holding a
-  // reference is expanded (POST /api/hub/expand) before it goes down the
-  // PTY, so the agent gets the item's path, name and kind. The hub is THIS
-  // computer's: a session on another device gets nothing from it.
+  // Shared files (internally "the hub": backend core/hub.py; docs/web-ui.md
+  // "Shared files"): one shared place per MindFlock home for files, pictures
+  // and snippets every session can use. 📎 beside the compose box: pick a
+  // photo or file (the phone's own picker: library, camera or files) → it
+  // goes into Shared files (source=phone) and its code (file:k7m2) into the
+  // message → Send. A message holding a code (file:, or the first hub:) is
+  // expanded (POST /api/hub/expand) before it goes down the PTY, so the agent
+  // gets the item's path, name and kind. They are THIS computer's: a session
+  // on another device gets nothing from them. The sheet ticks several items
+  // (a checkbox per row) and adds them all to the message at once.
   var hubAttachBtn = document.getElementById("hub-attach");
   var hubFileEl = document.getElementById("hub-file");
   var hubSheet = document.getElementById("hub-sheet");
   var hubListEl = document.getElementById("hub-list");
   var hubErrEl = document.getElementById("hub-error");
   var hubChipsEl = document.getElementById("hub-chips");
-  // What the message carries from the hub: ref -> item, shown as chips
+  // What the message carries from Shared files: ref -> item, shown as chips
   // (thumbnail, name, ✕) above the box — the confirmation a status line
   // drawn over the terminal never was.
   var hubAttached = {};
@@ -2438,7 +2440,7 @@
   }
   composeEl.addEventListener("input", hubRenderChips);
   // A reference, not glued to a word or path before it (the server's rule).
-  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])hub:[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
+  var HUB_REF_RE = /(^|[^A-Za-z0-9_./:@-])(?:file|hub):[A-Za-z0-9]{4,8}(?![A-Za-z0-9_])/i;
   function hubHere() { return !current || String(current).indexOf("::") < 0; }
   function hubSize(n) {
     n = Number(n) || 0;
@@ -2467,7 +2469,7 @@
   function hubAddFiles(files, intoCompose) {
     var list = Array.prototype.slice.call(files || []);
     if (!list.length) return Promise.resolve([]);
-    flashStatus("adding " + (list.length === 1 ? (list[0].name || "the photo") : list.length + " files") + " to the hub…");
+    flashStatus("adding " + (list.length === 1 ? (list[0].name || "the photo") : list.length + " files") + " to Shared files…");
     var refs = [];
     var chain = Promise.resolve();
     list.forEach(function (f) {
@@ -2485,8 +2487,8 @@
       }
       return refs;
     }).catch(function (err) {
-      setStatus("couldn't add it to the hub: " + errText(err, "error"));
-      hubErr(errText(err, "couldn't add it to the hub"));
+      setStatus("couldn't add it to Shared files: " + errText(err, "error"));
+      hubErr(errText(err, "couldn't add it to Shared files"));
       return refs;
     });
   }
@@ -2512,7 +2514,7 @@
   }
   hubAttachBtn.addEventListener("click", function () {
     if (!hubHere()) {
-      flashStatus("the hub is on this computer — this session runs on another device");
+      flashStatus("Shared files are on this computer — this session runs on another device");
       return;
     }
     hubFileEl.click();
@@ -2526,9 +2528,74 @@
       else composeEl.focus();
     });
   });
+  // The sheet's selection: id -> item, in the order ticked. The bar under
+  // the list adds them all to the message (one chip each) or copies their
+  // codes; a tick never sends anything by itself.
+  var hubPicked = {};
+  var hubPickedOrder = [];
+  var hubSelBar = document.getElementById("hub-selbar");
+  var hubSelCount = document.getElementById("hub-sel-count");
+  function hubPickedItems() {
+    return hubPickedOrder.map(function (id) { return hubPicked[id]; }).filter(Boolean);
+  }
+  function hubRenderSel() {
+    var n = hubPickedItems().length;
+    hubSelBar.classList.toggle("hidden", !n);
+    hubSelCount.textContent = n + " selected";
+    document.getElementById("hub-sel-add").textContent = n === 1 ? "Add to message" : "Add " + n + " to message";
+    document.getElementById("hub-sel-copy").textContent = n === 1 ? "Copy code" : "Copy codes";
+  }
+  function hubClearSel() {
+    hubPicked = {};
+    hubPickedOrder = [];
+    Array.prototype.forEach.call(hubListEl.querySelectorAll(".hub-row-check"), function (c) {
+      c.checked = false;
+      c.closest(".hub-row").classList.remove("is-picked");
+    });
+    hubRenderSel();
+  }
+  document.getElementById("hub-sel-add").addEventListener("click", function () {
+    var items = hubPickedItems();
+    if (!items.length) return;
+    closeSheet(hubSheet);
+    items.forEach(hubAttach);
+    hubClearSel();
+    composeEl.focus();
+  });
+  document.getElementById("hub-sel-copy").addEventListener("click", function () {
+    var items = hubPickedItems();
+    if (!items.length) return;
+    var codes = items.map(function (it) { return it.ref; }).join(" ");
+    copyPlain(codes).then(function (ok) {
+      flashStatus(ok ? (items.length === 1 ? "code" : items.length + " codes") + " copied to clipboard — paste in any message" : "the codes are " + codes);
+    });
+  });
+  document.getElementById("hub-sel-clear").addEventListener("click", hubClearSel);
   function hubRow(it) {
     var row = document.createElement("div");
     row.className = "hub-row";
+    // A tick per row (a label: the whole box is the tap target).
+    var tickWrap = document.createElement("label");
+    tickWrap.className = "hub-row-tick";
+    var tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.className = "hub-row-check";
+    tick.checked = !!hubPicked[it.id];
+    tick.setAttribute("aria-label", "Select " + it.name);
+    row.classList.toggle("is-picked", tick.checked);
+    tick.addEventListener("change", function () {
+      if (tick.checked) {
+        hubPicked[it.id] = it;
+        if (hubPickedOrder.indexOf(it.id) < 0) hubPickedOrder.push(it.id);
+      } else {
+        delete hubPicked[it.id];
+        hubPickedOrder = hubPickedOrder.filter(function (x) { return x !== it.id; });
+      }
+      row.classList.toggle("is-picked", tick.checked);
+      hubRenderSel();
+    });
+    tickWrap.appendChild(tick);
+    row.appendChild(tickWrap);
     var thumb;
     if (it.kind === "image") {
       thumb = document.createElement("img");
@@ -2586,26 +2653,32 @@
   function loadHubSheet() {
     hubErr("");
     hubListEl.innerHTML = "";
-    hubListEl.appendChild(folderNote("Loading the hub…"));
+    hubListEl.appendChild(folderNote("Loading shared files…"));
     fetch("/api/hub")
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
-          if (!r.ok) throw new Error((j && j.error) || "couldn't read the hub (" + r.status + ")");
+          if (!r.ok) throw new Error((j && j.error) || "couldn't read shared files (" + r.status + ")");
           return j;
         });
       })
       .then(function (j) {
         hubListEl.innerHTML = "";
         var items = (j && j.items) || [];
+        // A ticked item gone meanwhile (removed elsewhere) drops out.
+        var live = {};
+        items.forEach(function (it) { live[it.id] = it; });
+        hubPickedOrder = hubPickedOrder.filter(function (id) { return !!live[id]; });
+        Object.keys(hubPicked).forEach(function (id) { if (!live[id]) delete hubPicked[id]; else hubPicked[id] = live[id]; });
+        hubRenderSel();
         if (!items.length) {
-          hubListEl.appendChild(folderNote("Nothing in the hub yet. Add a photo or file above — or on the computer, drop or paste one on the Hub panel."));
+          hubListEl.appendChild(folderNote("Nothing in Shared files yet. Add a photo or file above — or on the computer, drop or paste one in Shared files (⋯ menu)."));
           return;
         }
         items.slice(0, 60).forEach(function (it) { hubListEl.appendChild(hubRow(it)); });
       })
       .catch(function (err) {
         hubListEl.innerHTML = "";
-        hubErr(errText(err, "couldn't read the hub"));
+        hubErr(errText(err, "couldn't read shared files"));
       });
   }
   function openHubSheet() {
@@ -2614,7 +2687,7 @@
     loadHubSheet();
   }
   document.getElementById("hub-add").addEventListener("click", function () { hubFileEl.click(); });
-  document.getElementById("hub-done").addEventListener("click", function () { closeSheet(hubSheet); });
+  document.getElementById("hub-done").addEventListener("click", function () { hubClearSel(); closeSheet(hubSheet); });
 
   // --- image paste -----------------------------------------------------------
   // A pasted image can't go down the PTY as keystrokes, and the agent CLI runs

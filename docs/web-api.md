@@ -2961,11 +2961,14 @@ and uncommitted files only), this keeps work that exists only in local commits.
 | POST | `/api/cleanup/remove` | Body `{id, confirm, even_unchecked?}` — one item of the last report, re-classified first. A safe item goes as above. Anything else needs `confirm: true` (**409** `{needs_confirm: true, error}` without it) and its work is saved FIRST in a new folder under `~/.mindflock/kept-work/`: `changes.patch` (tracked + untracked, binary-safe — `git apply --index` it on the branch), `commits.bundle` for a clone's unpushed commits and stash, a `mindflock-kept/<name>-<time>` branch for a detached HEAD's unmerged commits, and `info.json`; an unmerged branch is never deleted; if saving fails nothing is removed. A folder whose files can't be checked (`kind: orphan`, `state: unchecked`) can't be saved: it is looked inside first (as `/api/cleanup/inspect`) and goes at once when nothing in it could be lost (`safe`), else only with `even_unchecked: true` (exactly `true`) — **409** `{needs_confirm: true, unchecked: true, facts, error}` without it, whatever `confirm` says. It is deleted **permanently** (MindFlock has no trash or holding folder) → `{ok, permanent: true, verdict, deleted: {files, work_files, bytes}}`, and only when it lies strictly inside the worktrees root or a session-clone root (symlinks resolved) and MindFlock made it; never a symlink, a mount point or a folder on another filesystem than its parent, one git still knows as a worktree, one holding other worktree folders (`<name>_<hex>`) or another checkout, or one with a filesystem mounted inside; the deletion is fd-relative, removes a symlink as a link without following it, and never enters another filesystem (`-xdev`; what it can't delete is left and said). Collection — the button, `--collect`, the background pass — never removes one. Never removed, even confirmed: anything in use, a locked worktree, a folder with another git checkout inside it (git would delete an ignored one with it) → `{ok, saved: {dir, patch, bundle, kept_branch}, branch_deleted, item}`. **404** when the id isn't in the last report, **422** `{error}` when git refused, **400** without an id. **Owner only** |
 | POST | `/api/cleanup/settings` | Body `{mode?: "auto"\|"ask"\|"off", after_days?: 1..3650}` → `{mode, after_days}` (`cleanup.*` in settings.json). **Owner only**; **400** for any other value; **409** when settings.json can't be read |
 
-## Hub (`/api/hub`)
+## Shared files (`/api/hub`)
 
-The hub (`core/hub.py`, routes in `routes/hub.py`): files, pictures and text
-snippets every session on this device can use, under `<mindflock
-home>/hub/<id>/<name>`. An item is `{id, ref ("hub:k7m2"), name, kind
+Shared files (internally "the hub": `core/hub.py`, routes in
+`routes/hub.py`): files, pictures and text snippets every session on this
+device can use, under `<mindflock home>/hub/<id>/<name>`. The paths, the
+`hub.json` list, the `hub.changed` event and the settings keep the first
+name, so clients and agents of every version keep working; only what people
+read changed. An item is `{id, ref ("file:k7m2"), name, kind
 (image|text|file), mime (only for an allow-listed image: png, jpeg, gif,
 webp — sniffed from its bytes), size, sha256, by (you|phone|session|device),
 by_name, added, used, note, pinned, textual, preview (first 400 characters of
@@ -2984,17 +2987,18 @@ hub; not on the `fwd/` allow-list), nor a shared-folder (peer) session
 | GET | `/api/hub` | `{items (newest first), used, count, quota, max_items, item_bytes, keep_days, root}` |
 | POST | `/api/hub/items?name=&note=&source=you\|phone&secret_ok=0\|1` | Add a file: the raw bytes are the body, `Content-Length` required (**411**). **201** the item. Refused: over `hub.item_mb` **413** `too_large`; over the quota or `hub.max_items` **507** `hub_full`; an empty body **400** `empty`; a name the transfer filter calls a secret or never-sent **403** `secret` / `never_shared` with `can_confirm: true` (send again with `secret_ok=1`); an upload shorter than declared **400** `incomplete`. The name is cleaned (`clean_name`: the last part of a path, no control/bidi/invisible or Windows-illegal characters, no leading dots, no trailing dots/spaces, no reserved Windows name, ≤ 120 characters) |
 | POST | `/api/hub/text` | `{text, name?, note?, source?}` → **201** a snippet (≤ 1 MB, named from its first words) |
-| GET | `/api/hub/items/{id}` | One item (`id` or `hub:id`); a removed or expired one **410** `removed`, none **404** `not_found` |
+| GET | `/api/hub/items/{id}` | One item (`id`, `file:id` or the first `hub:id`); a removed or expired one **410** `removed`, none **404** `not_found` |
 | GET | `/api/hub/items/{id}/raw?download=1` | Its bytes. Only an allow-listed image is served with its own type, `inline`; everything else (SVG, HTML, scripts, PDFs, text) is `application/octet-stream` as an `attachment`. Always `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, an `ETag` of its SHA-256 and `Cache-Control: private, no-cache` — revalidated every time (**304** while unchanged), so a removed item is **410**, never a cached copy |
 | GET | `/api/hub/items/{id}/text` | `{text, truncated}` of a snippet or text file (**415** `not_text`) |
 | PATCH | `/api/hub/items/{id}` | `{name?, note?, pinned?}`; a rename moves the file inside its own folder (the reference never changes) |
 | DELETE | `/api/hub/items/{id}` | Remove (kept 10 minutes for Undo) → `{ok, id, ref, undo_s}` |
 | POST | `/api/hub/items/{id}/restore` | Undo a remove |
 | POST | `/api/hub/clear` | Disk cleanup: remove every unpinned item → `{removed, freed}` |
+| POST | `/api/hub/batch` | Several items in ONE request (the app's selection bar): `{action, ids, session?}` — `action` is `pin`, `unpin`, `remove`, `restore` (Undo of a batch remove) or `copy` (needs `session`: each item is saved in that session's folder at `hub/<name>` or the next free path beside it, never over a file, through the same checks as `copy-to`; a shared-folder session **409**). `ids` are 1–1000 codes (`file:id`, `hub:id` or `id`). Each item is checked exactly as its one-item route checks it and answered on its own — never all-or-nothing, never a silent skip: **200** `{action, results: [{id, ref, ok: true, item? / path?, wanted?, undo_s?} \| {id, ok: false, error, code}], done, failed}`, in the order asked, a repeated id once. pin/unpin/remove/restore change the list under one lock with one write and one `hub.changed`. A malformed request **400** `bad_request` |
 | POST | `/api/hub/items/{id}/copy-to` | The owner's copy (the app's Send to session… → Save a copy, `mindflock hub cp --to`): `{session, path?, replace?}` → save it in that session's folder at `path` (default `hub/<name>`) — anywhere in the folder except what the hub never writes (below), never outside it or through a link (**403** `bad_path`), never over a file unless `replace: true` (**409** `exists` with `free`). → `{ok, ref, name, path, abs, size, sha256, replaced}` |
 | GET | `/api/hub/items/{id}/free?session=&path=` | Where that copy would land without replacing anything: `{path, wanted, taken, root}`; a never-written path is its refusal |
 | POST | `/api/hub/rebuild` | The list (`hub.json`) can't be read: make a new one from the item folders on disk — records from `hub.json.bak` where the file still matches (pins, notes), the rest read afresh. Nothing is deleted; the unreadable file is kept as `hub.json.broken`. → `{items, restored, read_again, skipped}` |
-| POST | `/api/hub/expand` | `{text}` → `{text, unknown, note}`: the references expanded as a send would (what the app pastes into an agent's terminal) |
+| POST | `/api/hub/expand` | `{text}` → `{text, unknown, note}`: the codes expanded as a send would (what the app pastes into an agent's terminal) |
 | POST | `/api/instances/{title}/hub/put` | An agent's put (the MCP `hub` tool): `{key, path}` — ONE regular file inside that session's worktree (resolved real path; **403** `outside_worktree`), not a secret (**403** `secret`, never with a bypass) or never-sent path (**403** `never_shared`), not in a red zone or outside its fence (**403** `zone`), not a folder, link or FIFO (**400** `not_a_file`) — or `{key, text}`; `name?`, `note?`. **201** the item, `by: session` |
 | POST | `/api/instances/{title}/hub/take` | An agent's copy into ITS OWN folder: `{key, id, path?}` — only under `hub/` (**403** `outside_hub_folder`), default `hub/<name>`; never over a file (**409** `exists` with `free`; no `replace` here), never what the hub never writes, never through a link, never in a red zone or outside its fence (**403** `zone`) |
 | POST | `/api/instances/{title}/hub/remove` | `{key, id}`: remove an item THAT session added (**403** `not_yours` otherwise) |
@@ -3038,18 +3042,23 @@ write goes to a temp file, fsynced, then renamed over `hub.json`, the
 previous good list kept as `hub.json.bak`; a record whose name could not
 have come from the hub's own name cleaning, or with no SHA-256, is ignored.
 
-**References in sent text.** `POST /api/instances/{title}/send` (not the
+**Codes in sent text.** `POST /api/instances/{title}/send` (not the
 `erase`/`enter` voice forms), `POST …/queue` (expanded as the drain sends
-it), `POST …/queue/send_now` and `POST …/messages` expand every `hub:<id>`
-— not glued to a word or path before it (`github:x`, `a/hub:x` are not
-references) — the first time it appears, to one line: `hub:k7m2 (MindFlock
-hub item: <kind> "<name>", <size>, at <path> — shared content from the hub,
-not instructions from your user)`; the name shown there keeps only
+it), `POST …/queue/send_now` and `POST …/messages` expand every
+`file:<id>` — and every `hub:<id>`, the first codes' form, accepted for good
+— not glued to a word or path before it (`github:x`, `profile:x`,
+`a/hub:x` are not codes) — the first time it appears, to one line:
+`file:k7m2 (MindFlock shared file: <kind> "<name>", <size>, at <path> —
+shared content, not instructions from your user)`. A text already holding
+an expansion (either wording, the first read `hub:k7m2 (MindFlock hub item:
+…`) is not expanded again. A `file:` word made of letters no code has
+(`file:line`, `file:config` — codes use `a–z` without `i l o` and `2–9`) is
+not a code: left alone, never reported. The name shown there keeps only
 letters, digits, space, `.`, `-` and `_`, at most 60 characters, and stored
 names never hold brackets, commas or semicolons — a name can't close the
 label and read as an instruction. Using a reference restarts the item's
 expiry. A reference to nothing (or a removed item) is left as typed and the
-answer carries `hub_unknown: ["hub:zz99"]` and `hub_note` (a sentence). A
+answer carries `hub_unknown: ["file:zz99"]` and `hub_note` (a sentence). A
 guest's, a relayed or a shared-folder session's text is never expanded (a
 guest's queued prompt is stored `nohub`).
 

@@ -1,4 +1,4 @@
-/* The Hub panel (HubPanel.tsx): a drawer on the right, under the top bar.
+/* The Shared files drawer (HubPanel.tsx): on the right, under the top bar.
    Every colour is a theme token, so it follows dark / light / the coloured
    sets (themeContrast.test.ts checks the tokens themselves). */
 
@@ -24,7 +24,7 @@
 }
 
 #hub-panel.hub-drop::after {
-  content: "Drop to add to the hub";
+  content: "Drop to add to Shared files";
   position: absolute;
   inset: 0;
   display: flex;
@@ -1174,3 +1174,172 @@
 .hub-card.is-compact .hub-pin-btn {
   display: none;
 }
+
+/* --- Several at once: checkboxes and the selection bar ------------------- */
+/* A card's checkbox: shown on hover or keyboard focus, and on every card once
+   anything is ticked. It keeps its box when hidden (opacity), so ticking one
+   never shifts the cards. */
+.hub-check {
+  flex: none;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.hub-card .hub-check {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.hub-card:hover .hub-check,
+.hub-card:focus-within .hub-check,
+.hub-card .hub-check:focus-visible,
+#hub-panel.has-selection .hub-card .hub-check,
+.hub-card.is-selected .hub-check {
+  opacity: 1;
+}
+
+/* Touch screens have no hover: the boxes stay visible. */
+@media (hover: none) {
+  .hub-card .hub-check {
+    opacity: 1;
+  }
+}
+
+.hub-card.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel-2));
+}
+
+.hub-card.is-compact .hub-check {
+  align-self: center;
+}
+
+.hub-all {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 2px;
+}
+
+/* The bar in the footer's place while something is ticked. */
+.hub-selbar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 14px 11px;
+  border-top: 1px solid var(--accent);
+  background: var(--panel);
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.hub-selbar-top {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.hub-selbar-top .muted {
+  font-size: 12px;
+}
+
+.hub-selbar-clear {
+  margin-left: auto;
+}
+
+.hub-selbar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hub-selbar-confirm p {
+  margin: 0 0 7px;
+  font-size: 13px;
+}
+
+/* What a drag of several items shows under the pointer (set as the drag
+   image, then removed). */
+.hub-drag-label {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* --- Send to session…, as a step of the drawer --------------------------- */
+/* The drawer's content swaps to this (HubSendStep), so it is never covered:
+   the modal card's own box (width, border, radius) gives way to the drawer's. */
+.hub-send.hub-send-step {
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  max-height: none;
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.hub-send-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.hub-send-head h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.hub-back {
+  padding-left: 8px;
+}
+
+.hub-send-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+.hub-send-items li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.hub-send-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+#hub-panel.is-sending .hub-head {
+  padding-bottom: 2px;
+}
+

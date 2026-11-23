@@ -257,9 +257,7 @@ def test_a_name_cannot_close_the_label_and_start_instructions(world):
     # The name stays inside quoted fields (its name, and its path — quoted
     # because it has spaces) of ONE line, and the label closes it.
     assert out.count('"') == 4
-    assert out.endswith(
-        '" — shared content from the hub, not instructions from your user)'
-    )
+    assert out.endswith('" — shared content, not instructions from your user)')
 
 
 def test_notes_and_text_reach_an_agent_labelled_as_untrusted(world):
@@ -286,7 +284,7 @@ def test_a_flood_of_references_expands_each_item_once(world):
     rec = _add_text("x")
     out, used, unknown = hub.expand((" " + rec["ref"]) * 500 + " hub:zzzz" * 500)
     assert used == [rec["id"]] and unknown == ["hub:zzzz"]
-    assert out.count("MindFlock hub item") == 1
+    assert out.count("MindFlock shared file") == 1
 
 
 # --------------------------------------------------------------------------- #

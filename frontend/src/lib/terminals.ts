@@ -220,18 +220,18 @@ export function attachCopyOnSelect(
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
         if (!ok) return;
-        // With the hub open, the copy offers to keep the text there too
+        // With Shared files open, the copy offers to keep the text there too
         // (a snippet every session can use) — never otherwise: copying is
         // too frequent for an action toast each time.
         if (useHubUi.getState().open)
           toast("Copied " + sel.length + " chars", {
             action: {
-              label: "Add to hub",
-              ariaLabel: "Add the selected text to the hub as a snippet",
+              label: "Add to Shared files",
+              ariaLabel: "Add the selected text to Shared files as a snippet",
               onClick: () =>
                 void addText(sel)
-                  .then((it) => toast("Added a snippet to the hub — " + it.ref))
-                  .catch((err) => toast("Couldn't add it to the hub: " + errMsg(err))),
+                  .then((it) => toast("Added a snippet to Shared files — " + it.ref))
+                  .catch((err) => toast("Couldn't add it to Shared files: " + errMsg(err))),
             },
           });
         else toast("Copied " + sel.length + " chars");

@@ -1,22 +1,35 @@
-/** The Hub panel (lib/hub.ts; docs/web-ui.md "Hub"): a drawer on the right
- * that lists what is in the hub — newest first, under day headings, filtered
- * by kind (All · Pictures · Text · From agents) — and is the one place items
- * are added (drop, Add files…, New snippet, or Ctrl/⌘+V while it is open)
- * and used (Send to session…, the code chip, Pin, and the ⋯ menu).
+/** Shared files (lib/hub.ts; docs/web-ui.md "Shared files"): a drawer on
+ * the right that lists the shared files — newest first, under day headings,
+ * filtered by kind (All · Pictures · Text · From agents) — and is the one
+ * place items are added (drop, Add files…, New snippet, or Ctrl/⌘+V while it
+ * is open) and used (Send to session…, the code chip, Pin, and the ⋯ menu).
+ * Opened from the top bar's ⋯ menu, Alt+H or the command palette.
  *
- * Not a modal: the sessions stay usable beside it, so an item can be DRAGGED
- * (by its grip) onto a session's row, its message box or its terminal.
- * Escape closes it while focus is inside it. Electron has no
- * window.prompt/confirm: rename, note, "add it anyway" and the picture
- * viewer are in-page. What the hub says goes to the top of the window
+ * Several at once: each card has a checkbox (shown on hover or focus, and on
+ * every card once one is ticked; Shift+click ticks a range; "Select all"
+ * ticks what the filter shows, Ctrl/⌘+A too). The selection bar then sends
+ * them all in one message, puts them in the focused session's prompt,
+ * copies their codes, pins / unpins or removes them — one request answered
+ * per item (POST /api/hub/batch); what could not be done is said in the
+ * drawer, item by item.
+ *
+ * Send to session… is a STEP of the drawer (HubSendStep: the content swaps,
+ * with Back), never a dialog the drawer could cover.
+ *
+ * Not a modal: the sessions stay usable beside it, so an item — or the
+ * whole selection — can be DRAGGED (by a card's grip) onto a session's row,
+ * its message box or its terminal. Escape goes Back from the send step,
+ * then clears the selection, then closes. Electron has no
+ * window.prompt/confirm: rename, note, "add it anyway", "remove N?" and the
+ * picture viewer are in-page. What it says goes to the top of the window
  * (HubNoticeBar), never over a session's prompt line. */
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../../api/client";
-import { useConfig } from "../../state/queries";
+import { useConfig, useInstances } from "../../state/queries";
+import { displayName, useUi } from "../../state/store";
 import { errMsg, relTime } from "../../lib/format";
 import {
-  HUB_MIME,
   addFiles,
   addText,
   addedToast,
@@ -25,18 +38,24 @@ import {
   copyItemText,
   copyPath,
   copyRef,
+  copyRefs,
   download,
+  dragSet,
   dropProblem,
   expiryLabel,
   humanSize,
   hush,
   kindLabel,
+  pinItems,
+  putInPrompt,
   raiseItemLimit,
   rawUrl,
   rebuildHub,
   refreshHub,
   removeItem,
+  removeItems,
   say,
+  startDrag,
   updateItem,
   usageLine,
   useHub,
@@ -44,8 +63,9 @@ import {
   whoLabel,
   type HubItem,
 } from "../../lib/hub";
+import type { Instance } from "../../api/types";
 import { Modal } from "../Modal";
-import { HubSendDialog } from "./HubSendDialog";
+import { HubSendStep, hubTargets } from "./HubSendStep";
 import "./HubPanel.css";
 
 /** Whether a key/paste target is a place the person types (then the panel
@@ -84,6 +104,30 @@ export function filterItems(items: HubItem[], f: HubFilter, find: string): HubIt
   });
 }
 
+/** A checkbox click with Shift held: every item between the last one
+ * clicked (`anchor`) and this one, in the order shown, takes this one's new
+ * state. Without Shift (or with no anchor still shown): just this one. */
+export function rangeSelect(selected: string[], shownIds: string[], anchor: string | null, id: string, on: boolean, shift: boolean): string[] {
+  let ids = [id];
+  const a = anchor ? shownIds.indexOf(anchor) : -1;
+  const b = shownIds.indexOf(id);
+  if (shift && a >= 0 && b >= 0) ids = shownIds.slice(Math.min(a, b), Math.max(a, b) + 1);
+  const set = new Set(selected);
+  for (const x of ids) {
+    if (on) set.add(x);
+    else set.delete(x);
+  }
+  // In list order, so the bar and a send carry them as shown.
+  return [...shownIds.filter((x) => set.has(x)), ...selected.filter((x) => set.has(x) && !shownIds.includes(x))];
+}
+
+/** Which of the selected items Pin and Unpin act on — the bar says both
+ * counts when the selection is mixed, so a skip is never silent. */
+export function pinSplit(items: Pick<HubItem, "pinned">[]): { toPin: number; toUnpin: number } {
+  const pinned = items.filter((i) => i.pinned).length;
+  return { toPin: items.length - pinned, toUnpin: pinned };
+}
+
 /** "Today" / "Yesterday" / "Mon 17 Nov" for an item's day. */
 export function dayLabel(ts: number, now = Date.now() / 1000): string {
   const d = new Date(ts * 1000);
@@ -112,13 +156,12 @@ export function HubPanel() {
   return (
     <>
       {open && <HubDrawer />}
-      <HubSendDialog />
       <HubNoticeBar />
     </>
   );
 }
 
-/** What the hub says, at the top centre of the window. */
+/** What Shared files says, at the top centre of the window. */
 function HubNoticeBar() {
   const n = useHubUi((s) => s.notice);
   const drawer = useHubUi((s) => s.open);
@@ -158,12 +201,17 @@ function HubNoticeBar() {
 function HubDrawer() {
   const setOpen = useHubUi((s) => s.setOpen);
   const problems = useHubUi((s) => s.problems);
+  const sending = useHubUi((s) => s.sending);
+  const selected = useHubUi((s) => s.selected);
+  const setSelected = useHubUi((s) => s.setSelected);
   const q = useHub(true);
   const list = q.data;
-  const items = list?.items || [];
+  const items = useMemo(() => list?.items || [], [list]);
   const ref = useRef<HTMLElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
+  const allBox = useRef<HTMLInputElement>(null);
+  const anchor = useRef<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState("");
   const [snippet, setSnippet] = useState<string | null>(null);
@@ -172,10 +220,17 @@ function HubDrawer() {
   const [filter, setFilter] = useState<HubFilter>("all");
   const [viewing, setViewing] = useState<HubItem | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const brokenErr =
     q.isError && (q.error as { body?: { code?: string } } | null)?.body?.code === "hub_broken" ? errMsg(q.error) : "";
 
-  // Opening it always reads the hub afresh (the top bar's copy may be old).
+  // The focused session, when Shared files can go there: the selection
+  // bar's "Put in ‹it›'s prompt".
+  const focused = useUi((s) => s.focused);
+  const targets = hubTargets(useInstances().data as Instance[] | undefined);
+  const here = focused && targets.some((t) => t.title === focused) ? focused : "";
+
+  // Opening it always reads the list afresh (the ⋯ menu's copy may be old).
   useEffect(() => {
     void q.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,13 +255,15 @@ function HubDrawer() {
     if (s.length) setSecrets((prev) => [...prev, ...s]);
   };
 
-  // Paste anywhere while the panel is open — unless the person is typing in
-  // a box (the composer, a terminal, the snippet editor), which keeps it.
+  // Paste anywhere while the list is open — unless the person is typing in
+  // a box (the composer, a terminal, the snippet editor), which keeps it,
+  // or the drawer is on its send step.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const inside = !!ref.current?.contains(e.target as Node);
       if (
         editable(e.target) ||
+        useHubUi.getState().sending ||
         (!inside && document.activeElement && document.activeElement !== document.body && !ref.current?.contains(document.activeElement))
       )
         return;
@@ -230,22 +287,9 @@ function HubDrawer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.defaultPrevented) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setOpen(false);
-      return;
-    }
-    // "/" or Ctrl/⌘+F: the find box.
-    if ((e.key === "/" && !editable(e.target)) || (e.key === "f" && (e.ctrlKey || e.metaKey))) {
-      e.preventDefault();
-      findRef.current?.focus();
-    }
-  };
-
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types || []).includes("Files");
   const shown = useMemo(() => filterItems(items, filter, find), [items, filter, find]);
+  const shownIds = useMemo(() => shown.map((i) => i.id), [shown]);
   const days = useMemo(() => {
     const out: { label: string; items: HubItem[] }[] = [];
     for (const it of shown) {
@@ -257,6 +301,55 @@ function HubDrawer() {
     return out;
   }, [shown]);
   const unpinned = items.filter((i) => !i.pinned).length;
+
+  // The selection, as items still in the list (one removed elsewhere drops out).
+  const selItems = useMemo(() => items.filter((i) => selected.includes(i.id)), [items, selected]);
+  const hiddenSel = selItems.filter((i) => !shownIds.includes(i.id)).length;
+  const shownSel = selItems.length - hiddenSel;
+  const allOn = shown.length > 0 && shownSel === shown.length;
+  useEffect(() => {
+    if (allBox.current) allBox.current.indeterminate = shownSel > 0 && !allOn;
+  }, [shownSel, allOn]);
+  useEffect(() => {
+    if (selItems.length !== selected.length) setSelected(selItems.map((i) => i.id));
+    if (!selItems.length) setRemoving(false);
+  }, [selItems, selected, setSelected]);
+  const tick = (id: string, on: boolean, shift: boolean) => {
+    setSelected(rangeSelect(useHubUi.getState().selected, shownIds, anchor.current, id, on, shift));
+    anchor.current = id;
+  };
+  const selectAll = (on: boolean) => {
+    const cur = useHubUi.getState().selected;
+    setSelected(on ? [...new Set([...cur, ...shownIds])] : cur.filter((x) => !shownIds.includes(x)));
+    anchor.current = null;
+  };
+  const clearSel = () => {
+    setSelected([]);
+    setRemoving(false);
+    anchor.current = null;
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (useHubUi.getState().selected.length) clearSel();
+      else setOpen(false);
+      return;
+    }
+    if (sending) return;
+    // "/" or Ctrl/⌘+F: the find box.
+    if ((e.key === "/" && !editable(e.target)) || (e.key === "f" && (e.ctrlKey || e.metaKey))) {
+      e.preventDefault();
+      findRef.current?.focus();
+      return;
+    }
+    // Ctrl/⌘+A out of a text field: tick everything the filter shows.
+    if (e.key === "a" && (e.ctrlKey || e.metaKey) && !editable(e.target) && shown.length) {
+      e.preventDefault();
+      selectAll(true);
+    }
+  };
 
   const clearUnpinned = async () => {
     try {
@@ -270,17 +363,20 @@ function HubDrawer() {
     }
   };
 
+  const { toPin, toUnpin } = pinSplit(selItems);
+  const n = selItems.length;
+
   return (
     <aside
       id="hub-panel"
       ref={ref}
       tabIndex={-1}
       role="complementary"
-      aria-label="Hub — files and text every session can use"
-      className={dragOver ? "hub-drop" : undefined}
+      aria-label="Shared files — files and text every session can use"
+      className={(dragOver ? "hub-drop" : "") + (n ? " has-selection" : "") + (sending ? " is-sending" : "")}
       onKeyDown={onKeyDown}
       onDragOver={(e) => {
-        if (!hasFiles(e)) return;
+        if (!hasFiles(e) || sending) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
         setDragOver(true);
@@ -289,7 +385,7 @@ function HubDrawer() {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
       }}
       onDrop={(e) => {
-        if (!hasFiles(e)) return;
+        if (!hasFiles(e) || sending) return;
         e.preventDefault();
         e.stopPropagation();
         setDragOver(false);
@@ -298,194 +394,314 @@ function HubDrawer() {
     >
       <header className="hub-head">
         <div className="hub-title">
-          <h2>Hub</h2>
-          <p className="hub-sub">
-            Files and text every session can use. Each item has a code like <code>hub:k7m2</code> — put it in any prompt
-            and the agent gets the file.
-          </p>
+          <h2>Shared files</h2>
+          {!sending && (
+            <p className="hub-sub">
+              Files and text every session can use. Each item has a code like <code>file:k7m2</code> — put it in any prompt
+              and the agent gets the file.
+            </p>
+          )}
         </div>
-        <button type="button" className="hub-x" aria-label="Close the hub" title="Close (Esc)" onClick={() => setOpen(false)}>
+        <button type="button" className="hub-x" aria-label="Close Shared files" title="Close (Esc)" onClick={() => setOpen(false)}>
           ✕
         </button>
       </header>
 
-      <div className="hub-add">
-        <button type="button" className="hub-btn primary" onClick={() => fileInput.current?.click()}>
-          Add files…
-        </button>
-        <button type="button" className="hub-btn" onClick={() => setSnippet(snippet === null ? "" : null)} aria-expanded={snippet !== null}>
-          New snippet
-        </button>
-        <span className="hub-add-hint">or drop here · paste with {PASTE_KEY}</span>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          hidden
-          aria-hidden="true"
-          tabIndex={-1}
-          onChange={(e) => {
-            const fs = Array.from(e.target.files || []);
-            e.target.value = "";
-            void add(fs);
+      {sending ? (
+        <HubSendStep
+          key={sending.map((i) => i.id).join(",")}
+          items={sending}
+          onBack={() => useHubUi.getState().openSend(null)}
+          onDone={() => {
+            useHubUi.getState().openSend(null);
+            clearSel();
           }}
         />
-      </div>
-
-      {snippet !== null && <SnippetEditor value={snippet} onChange={setSnippet} onDone={() => setSnippet(null)} />}
-
-      {busy && (
-        <p className="hub-busy" role="status">
-          {busy}
-        </p>
-      )}
-
-      {problems.map((p) => (
-        <div key={p.id} className="hub-problem" role="alert">
-          <p>{p.text}</p>
-          <div className="hub-confirm-actions">
-            {p.raiseTo && (
-              <button
-                type="button"
-                className="hub-btn primary"
-                onClick={() => {
-                  dropProblem(p.id);
-                  void raiseItemLimit(p.raiseTo!);
-                }}
-              >
-                Raise the limit to {p.raiseTo} MB
-              </button>
-            )}
-            <button type="button" className="hub-btn" onClick={() => dropProblem(p.id)}>
-              Dismiss
+      ) : (
+        <>
+          <div className="hub-add">
+            <button type="button" className="hub-btn primary" onClick={() => fileInput.current?.click()}>
+              Add files…
             </button>
-          </div>
-        </div>
-      ))}
-
-      {secrets.map((f, i) => (
-        <div key={f.name + i} className="hub-confirm" role="alertdialog" aria-label={"Add " + f.name + " anyway?"}>
-          <p>
-            <strong>{f.name} looks like a secret</strong> (an env file, key or credential). Every session can read the hub.
-          </p>
-          <div className="hub-confirm-actions">
-            <button
-              type="button"
-              className="hub-btn"
-              onClick={() => {
-                setSecrets((s) => s.filter((_, j) => j !== i));
-                void add([f], true);
+            <button type="button" className="hub-btn" onClick={() => setSnippet(snippet === null ? "" : null)} aria-expanded={snippet !== null}>
+              New snippet
+            </button>
+            <span className="hub-add-hint">or drop here · paste with {PASTE_KEY}</span>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(e) => {
+                const fs = Array.from(e.target.files || []);
+                e.target.value = "";
+                void add(fs);
               }}
-            >
-              Add it anyway
-            </button>
-            <button type="button" className="hub-btn primary" autoFocus onClick={() => setSecrets((s) => s.filter((_, j) => j !== i))}>
-              Don't add it
-            </button>
+            />
           </div>
-        </div>
-      ))}
 
-      {items.length > 0 && (
-        <div className="hub-tools">
-          <div className="hub-chips" role="group" aria-label="Show">
-            {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                type="button"
-                className={"hub-chip" + (filter === f.key ? " on" : "")}
-                aria-pressed={filter === f.key}
-                onClick={() => setFilter(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <input
-            ref={findRef}
-            className="hub-filter"
-            type="search"
-            placeholder="Find…  /"
-            aria-label="Find an item in the hub (/ or Ctrl+F)"
-            value={find}
-            onChange={(e) => setFind(e.target.value)}
-          />
-        </div>
-      )}
+          {snippet !== null && <SnippetEditor value={snippet} onChange={setSnippet} onDone={() => setSnippet(null)} />}
 
-      <div className="hub-list-wrap">
-        {brokenErr ? (
-          <div className="hub-problem" role="alert">
-            <p>{brokenErr}</p>
-            <div className="hub-confirm-actions">
-              <button type="button" className="hub-btn primary" onClick={() => void rebuildHub()}>
-                Rebuild the list
-              </button>
-            </div>
-          </div>
-        ) : q.isLoading ? (
-          <p className="hub-empty muted">Loading the hub…</p>
-        ) : q.isError && !list ? (
-          <p className="hub-empty" role="alert">
-            Couldn't load the hub ({errMsg(q.error)}).{" "}
-            <button type="button" className="hub-link" onClick={() => void q.refetch()}>
-              Try again
-            </button>
-          </p>
-        ) : !items.length ? (
-          <div className="hub-empty-big">
-            <div className="hub-empty-art" aria-hidden="true">
-              ⇪
-            </div>
-            <p>
-              <strong>Nothing in the hub yet.</strong>
+          {busy && (
+            <p className="hub-busy" role="status">
+              {busy}
             </p>
-            <p>
-              Drop a file here, paste a screenshot ({PASTE_KEY}), or add a snippet. Each item gets a code like{" "}
-              <code>hub:k7m2</code> — put it in any session's prompt, use <em>Send to session…</em>, or drag the item onto a
-              session.
-            </p>
-            <p className="muted">Agents can add files here too.</p>
-          </div>
-        ) : !shown.length ? (
-          <p className="hub-empty muted">Nothing here matches{find ? ' "' + find + '"' : ""}.</p>
-        ) : (
-          days.map((d) => (
-            <section key={d.label} className="hub-day" aria-label={d.label}>
-              <h3 className="hub-day-h">{d.label}</h3>
-              <ul className="hub-list">
-                {d.items.map((it) => (
-                  <HubCard key={it.id} item={it} onView={setViewing} />
-                ))}
-              </ul>
-            </section>
-          ))
-        )}
-      </div>
+          )}
 
-      {list && (
-        <footer className="hub-foot">
-          <span>{usageLine(list)}</span>
-          <span className="muted" title={"Settings: hub.keep_days (" + list.keep_days + ")"}>
-            Deleted automatically {list.keep_days} days after last use — Pin to keep
-          </span>
-          {unpinned > 0 &&
-            (clearing ? (
-              <span className="hub-foot-confirm" role="alertdialog" aria-label="Remove every unpinned item?">
-                Remove {unpinned} unpinned?{" "}
-                <button type="button" className="hub-link" onClick={() => void clearUnpinned()}>
-                  Remove
-                </button>{" "}
-                <button type="button" className="hub-link" autoFocus onClick={() => setClearing(false)}>
-                  Keep
+          {problems.map((p) => (
+            <div key={p.id} className="hub-problem" role="alert">
+              <p>{p.text}</p>
+              <div className="hub-confirm-actions">
+                {p.raiseTo && (
+                  <button
+                    type="button"
+                    className="hub-btn primary"
+                    onClick={() => {
+                      dropProblem(p.id);
+                      void raiseItemLimit(p.raiseTo!);
+                    }}
+                  >
+                    Raise the limit to {p.raiseTo} MB
+                  </button>
+                )}
+                <button type="button" className="hub-btn" onClick={() => dropProblem(p.id)}>
+                  Dismiss
                 </button>
-              </span>
+              </div>
+            </div>
+          ))}
+
+          {secrets.map((f, i) => (
+            <div key={f.name + i} className="hub-confirm" role="alertdialog" aria-label={"Add " + f.name + " anyway?"}>
+              <p>
+                <strong>{f.name} looks like a secret</strong> (an env file, key or credential). Every session can read Shared files.
+              </p>
+              <div className="hub-confirm-actions">
+                <button
+                  type="button"
+                  className="hub-btn"
+                  onClick={() => {
+                    setSecrets((s) => s.filter((_, j) => j !== i));
+                    void add([f], true);
+                  }}
+                >
+                  Add it anyway
+                </button>
+                <button type="button" className="hub-btn primary" autoFocus onClick={() => setSecrets((s) => s.filter((_, j) => j !== i))}>
+                  Don't add it
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {items.length > 0 && (
+            <div className="hub-tools">
+              <label className="hub-all" title="Select everything shown (Ctrl+A)">
+                <input
+                  ref={allBox}
+                  type="checkbox"
+                  className="hub-check"
+                  checked={allOn}
+                  disabled={!shown.length}
+                  aria-label={allOn ? "Clear the selection of what is shown" : "Select all " + shown.length + " shown"}
+                  onChange={(e) => selectAll(e.target.checked)}
+                />
+              </label>
+              <div className="hub-chips" role="group" aria-label="Show">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    className={"hub-chip" + (filter === f.key ? " on" : "")}
+                    aria-pressed={filter === f.key}
+                    onClick={() => setFilter(f.key)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                ref={findRef}
+                className="hub-filter"
+                type="search"
+                placeholder="Find…  /"
+                aria-label="Find a shared file (/ or Ctrl+F)"
+                value={find}
+                onChange={(e) => setFind(e.target.value)}
+              />
+            </div>
+          )}
+
+          <div className="hub-list-wrap">
+            {brokenErr ? (
+              <div className="hub-problem" role="alert">
+                <p>{brokenErr}</p>
+                <div className="hub-confirm-actions">
+                  <button type="button" className="hub-btn primary" onClick={() => void rebuildHub()}>
+                    Rebuild the list
+                  </button>
+                </div>
+              </div>
+            ) : q.isLoading ? (
+              <p className="hub-empty muted">Loading shared files…</p>
+            ) : q.isError && !list ? (
+              <p className="hub-empty" role="alert">
+                Couldn't load shared files ({errMsg(q.error)}).{" "}
+                <button type="button" className="hub-link" onClick={() => void q.refetch()}>
+                  Try again
+                </button>
+              </p>
+            ) : !items.length ? (
+              <div className="hub-empty-big">
+                <div className="hub-empty-art" aria-hidden="true">
+                  ⇪
+                </div>
+                <p>
+                  <strong>Nothing in Shared files yet.</strong>
+                </p>
+                <p>
+                  Drop a file here, paste a screenshot ({PASTE_KEY}), or add a snippet. Each item gets a code like{" "}
+                  <code>file:k7m2</code> — put it in any session's prompt, use <em>Send to session…</em>, or drag the item onto a
+                  session.
+                </p>
+                <p className="muted">Agents can add files here too.</p>
+              </div>
+            ) : !shown.length ? (
+              <p className="hub-empty muted">Nothing here matches{find ? ' "' + find + '"' : ""}.</p>
             ) : (
-              <button type="button" className="hub-link" onClick={() => setClearing(true)}>
-                Remove unpinned items
-              </button>
-            ))}
-        </footer>
+              days.map((d) => (
+                <section key={d.label} className="hub-day" aria-label={d.label}>
+                  <h3 className="hub-day-h">{d.label}</h3>
+                  <ul className="hub-list">
+                    {d.items.map((it) => (
+                      <HubCard
+                        key={it.id}
+                        item={it}
+                        onView={setViewing}
+                        checked={selected.includes(it.id)}
+                        onTick={(on, shift) => tick(it.id, on, shift)}
+                        dragItems={() => dragSet(it, items, useHubUi.getState().selected)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))
+            )}
+          </div>
+
+          {n > 0 ? (
+            <div className="hub-selbar" role="toolbar" aria-label={n + " selected"}>
+              <div className="hub-selbar-top">
+                <strong>{n} selected</strong>
+                {hiddenSel > 0 && (
+                  <span className="muted" title="Ticked under another filter or search — the actions include them">
+                    {" "}
+                    · {hiddenSel} not shown by the filter
+                  </span>
+                )}
+                <button type="button" className="hub-link hub-selbar-clear" onClick={clearSel} title="Clear the selection (Esc)">
+                  Clear
+                </button>
+              </div>
+              {removing ? (
+                <div className="hub-selbar-confirm" role="alertdialog" aria-label={"Remove " + n + (n === 1 ? " item" : " items") + "?"}>
+                  <p>
+                    Remove {n === 1 ? selItems[0].name : n + " items"}? {n === 1 ? "Its code stops" : "Their codes stop"} working in every
+                    session (Undo right after).
+                  </p>
+                  <div className="hub-confirm-actions">
+                    <button
+                      type="button"
+                      className="hub-btn danger"
+                      onClick={() => {
+                        const these = selItems;
+                        clearSel();
+                        void removeItems(these);
+                      }}
+                    >
+                      Remove {n === 1 ? "it" : n}
+                    </button>
+                    <button type="button" className="hub-btn primary" autoFocus onClick={() => setRemoving(false)}>
+                      Keep
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="hub-selbar-acts">
+                  <button type="button" className="hub-btn primary" onClick={() => useHubUi.getState().openSend(selItems)}>
+                    Send to session…
+                  </button>
+                  {here && (
+                    <button
+                      type="button"
+                      className="hub-btn"
+                      title={"Type " + (n === 1 ? "its code" : "their " + n + " codes") + " into " + displayName(here) + "'s prompt"}
+                      onClick={() => {
+                        const these = selItems;
+                        void putInPrompt(here, these, "", { focus: true });
+                      }}
+                    >
+                      Put in {displayName(here)}'s prompt
+                    </button>
+                  )}
+                  <button type="button" className="hub-btn" onClick={() => void copyRefs(selItems)}>
+                    {n === 1 ? "Copy code" : "Copy codes"}
+                  </button>
+                  {toPin > 0 && (
+                    <button
+                      type="button"
+                      className="hub-btn"
+                      title={toUnpin ? toUnpin + " already pinned — this pins the other " + toPin : "Keep them past the automatic clean-up"}
+                      onClick={() => void pinItems(selItems.filter((i) => !i.pinned), true)}
+                    >
+                      {toUnpin ? "Pin " + toPin : "Pin"}
+                    </button>
+                  )}
+                  {toUnpin > 0 && (
+                    <button
+                      type="button"
+                      className="hub-btn"
+                      title={toPin ? toPin + " not pinned — this unpins the " + toUnpin + " that are" : "Let them go with the automatic clean-up"}
+                      onClick={() => void pinItems(selItems.filter((i) => i.pinned), false)}
+                    >
+                      {toPin ? "Unpin " + toUnpin : "Unpin"}
+                    </button>
+                  )}
+                  <button type="button" className="hub-btn danger" onClick={() => setRemoving(true)}>
+                    Remove…
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            list && (
+              <footer className="hub-foot">
+                <span>{usageLine(list)}</span>
+                <span className="muted" title={"Settings: hub.keep_days (" + list.keep_days + ")"}>
+                  Deleted automatically {list.keep_days} days after last use — Pin to keep
+                </span>
+                {unpinned > 0 &&
+                  (clearing ? (
+                    <span className="hub-foot-confirm" role="alertdialog" aria-label="Remove every unpinned item?">
+                      Remove {unpinned} unpinned?{" "}
+                      <button type="button" className="hub-link" onClick={() => void clearUnpinned()}>
+                        Remove
+                      </button>{" "}
+                      <button type="button" className="hub-link" autoFocus onClick={() => setClearing(false)}>
+                        Keep
+                      </button>
+                    </span>
+                  ) : (
+                    <button type="button" className="hub-link" onClick={() => setClearing(true)}>
+                      Remove unpinned items
+                    </button>
+                  ))}
+              </footer>
+            )
+          )}
+        </>
       )}
       {viewing && <PictureViewer item={viewing} onClose={() => setViewing(null)} />}
     </aside>
@@ -548,7 +764,7 @@ function SnippetEditor(props: { value: string; onChange(v: string): void; onDone
         <button type="button" className="hub-btn" onClick={props.onDone}>
           Cancel
         </button>
-        <button type="button" className="hub-btn primary" disabled={!props.value.trim() || saving} onClick={() => void save()} title="Add it to the hub (Ctrl+Enter)">
+        <button type="button" className="hub-btn primary" disabled={!props.value.trim() || saving} onClick={() => void save()} title="Add it to Shared files (Ctrl+Enter)">
           Add snippet
         </button>
       </div>
@@ -577,7 +793,26 @@ function KindIcon({ item, onView }: { item: HubItem; onView?(it: HubItem): void 
   );
 }
 
-function HubCard({ item, onView }: { item: HubItem; onView(it: HubItem): void }) {
+/** A drag of several items shows one small label, not the first card. */
+function dragLabel(dt: DataTransfer, n: number): void {
+  if (n < 2 || typeof document === "undefined" || !dt.setDragImage) return;
+  const el = document.createElement("div");
+  el.className = "hub-drag-label";
+  el.textContent = n + " shared files";
+  document.body.appendChild(el);
+  dt.setDragImage(el, 12, 12);
+  setTimeout(() => el.remove(), 0);
+}
+
+function HubCard(props: {
+  item: HubItem;
+  onView(it: HubItem): void;
+  checked: boolean;
+  onTick(on: boolean, shift: boolean): void;
+  /** What a drag of this card carries: the selection when it is ticked. */
+  dragItems(): HubItem[];
+}) {
+  const { item, onView, checked } = props;
   const openSend = useHubUi((s) => s.openSend);
   const [menu, setMenu] = useState(false);
   const [editing, setEditing] = useState<"" | "name" | "note">("");
@@ -638,16 +873,35 @@ function HubCard({ item, onView }: { item: HubItem; onView(it: HubItem): void })
 
   return (
     <li
-      className={"hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "")}
+      className={"hub-card" + (item.pinned ? " is-pinned" : "") + (compact ? " is-compact" : "") + (checked ? " is-selected" : "")}
       draggable={!editing}
       onDragStart={(e) => {
-        e.dataTransfer.setData(HUB_MIME, JSON.stringify({ id: item.id, ref: item.ref, name: item.name }));
-        e.dataTransfer.setData("text/plain", item.ref);
-        e.dataTransfer.effectAllowed = "copy";
+        const these = props.dragItems();
+        startDrag(e.dataTransfer, these);
+        dragLabel(e.dataTransfer, these.length);
       }}
     >
       <div className="hub-card-top">
-        <span className="hub-grip" aria-hidden="true" title={"Drag onto a session, its message box or its terminal to use " + item.ref}>
+        <input
+          type="checkbox"
+          className="hub-check"
+          checked={checked}
+          aria-label={"Select " + item.name}
+          title="Select (Shift+click: a range)"
+          onClick={(e: ReactMouseEvent<HTMLInputElement>) => props.onTick(e.currentTarget.checked, e.shiftKey)}
+          onChange={() => {
+            /* onClick carries Shift */
+          }}
+        />
+        <span
+          className="hub-grip"
+          aria-hidden="true"
+          title={
+            checked
+              ? "Drag onto a session, its message box or its terminal to use every selected item"
+              : "Drag onto a session, its message box or its terminal to use " + item.ref
+          }
+        >
           ⠿
         </span>
         <KindIcon item={item} onView={onView} />

@@ -68,8 +68,8 @@ modules under
     send_files       sending files from a session's worktree to another of
                      your devices (manifest + checksummed chunks)
     inbox            receiving them: /api/transfers, the inbox, bundles
-    hub              the hub: shared files/images/snippets every session can
-                     use, hub:<id> references expanded in sent prompts
+    hub              Shared files: files/images/snippets every session can
+                     use, file:<id> codes expanded in sent prompts
     session_bundle   a branch as a standalone git bundle (export / unpack)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
@@ -8559,7 +8559,7 @@ async def instance_send(
     hub_unknown: List[str] = []
     _HUB_NOHUB.set(not _hub_may_expand(request, inst))
     if not enter and not dictating:
-        # hub:<id> → the item's path, name and kind, one labelled line each
+        # file:<id> (or hub:<id>) → the item's path, name and kind, one line each
         # (core.hub.expand); a reference to nothing stays as typed.
         text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     asleep = _sleep.is_sleeping(title)
@@ -8631,7 +8631,8 @@ _hub.on_change(_hub_changed)
 
 
 def _hub_may_expand(request: Optional[Request], inst) -> bool:
-    """Whether ``hub:<id>`` references in text sent by this request are
+    """Whether shared-file codes (``file:<id>``, the first ``hub:<id>``) in
+    text sent by this request are
     expanded: the owner (or a local agent / the CLI) yes; a guest link, a
     request another MindFlock relayed, or a shared-folder (peer) session
     never — the hub is this device's owner's."""
@@ -8643,9 +8644,9 @@ def _hub_may_expand(request: Optional[Request], inst) -> bool:
 
 
 def _hub_expand(request: Optional[Request], inst, text: str) -> Tuple[str, List[str]]:
-    """``(text with its hub references expanded, unknown references)`` —
+    """``(text with its shared-file codes expanded, unknown codes)`` —
     unchanged when :func:`_hub_may_expand` says no."""
-    if not text or "hub:" not in text.lower() or not _hub_may_expand(request, inst):
+    if not text or not _hub.has_code(text) or not _hub_may_expand(request, inst):
         return text, []
     out, _used, unknown = _hub.expand(text)
     return out, unknown
@@ -9160,7 +9161,7 @@ async def post_message(
         if stat is not None:
             data = dict(data or {})
             data["diff_stat"] = stat
-    # hub:<id> references → the item's path, name and kind (core.hub); never
+    # file:<id> (or hub:<id>) codes → the item's path, name and kind (core.hub); never
     # for a guest's or a relayed message.
     text, hub_unknown = await asyncio.to_thread(_hub_expand, request, inst, text)
     # delivery "now" from any local session: one session may direct another

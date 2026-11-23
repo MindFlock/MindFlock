@@ -7,7 +7,7 @@ recipe, so no ``playwright install`` download is needed.
 * ``sky`` (default: the Sky's "All" tab), ``sky/<session>`` (that
   session's route), ``grid``;
 * ``settings`` or ``settings/<screen>`` (general, appearance, providers, …);
-* ``intake``, ``schedule``, ``new``, ``hub`` (the Hub panel open);
+* ``intake``, ``schedule``, ``new``, ``hub`` (Shared files open);
 * ``phone`` — the phone page ``/m`` (390 px wide unless ``--width``);
 * ``#<anything>`` — a raw URL hash.
 
