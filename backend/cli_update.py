@@ -444,7 +444,7 @@ def _update_checkout(args: argparse.Namespace) -> int:
         % (
             current or "?",
             (st.get("head") or "?")[:7],
-            " on %s" % st["branch"] if st.get("branch") else "",
+            " on %s" % st["branch"] if st.get("branch") else ", no branch checked out",
         )
     )
     print(_mode_line())
@@ -456,19 +456,26 @@ def _update_checkout(args: argparse.Namespace) -> int:
             return 0
         return 1
     newer = st.get("target_version") or ""
+    attach = st.get("attach") or {}
+    branch = st.get("branch") or str(attach.get("branch") or "")
     if behind <= 0:
         print("Up to date with %s." % (st.get("upstream") or "its remote"))
         return 0
     plan = "%d new commit%s on %s%s" % (
         behind,
         "" if behind == 1 else "s",
-        st.get("upstream") or st["branch"],
+        st.get("upstream") or branch,
         " (v%s)" % newer if newer and newer != current else "",
     )
+    if attach:
+        plan += (
+            "; it has no branch checked out, so it is put on %s at the commit "
+            "it is on first (no file changes)" % branch
+        )
     if args.check:
         print(
             "`mindflock update` would move %s forward: %s, refresh the install "
-            "and restart the server that runs from it." % (st["branch"], plan)
+            "and restart the server that runs from it." % (branch, plan)
         )
         return 1
     if self_update.running():
@@ -476,7 +483,7 @@ def _update_checkout(args: argparse.Namespace) -> int:
         return 1
     if not args.yes and not _confirm(
         "Move %s forward (%s) and restart the server (sessions keep running)?"
-        % (st["branch"], plan)
+        % (branch, plan)
     ):
         print("not updated")
         return 1
@@ -486,7 +493,9 @@ def _update_checkout(args: argparse.Namespace) -> int:
         return 1
 
     def _move_back() -> str:
-        if dev_update.move_back(st["checkout"], st.get("head") or ""):
+        if dev_update.move_back(
+            st["checkout"], st.get("head") or "", attach=st.get("attach")
+        ):
             return (
                 "moved the checkout back to %s (run `mindflock restart` to boot it)"
                 % ((st.get("head") or "")[:7])
@@ -495,7 +504,7 @@ def _update_checkout(args: argparse.Namespace) -> int:
 
     return _restart_running_server(
         args,
-        st["branch"],
+        branch,
         st["target"],
         rollback=_move_back,
         version=newer or current,

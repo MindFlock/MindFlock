@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wins over an unlinked one, and a real tie is a "did you mean" naming both.
   `mindflock devices` and the MCP `list_devices` show the name to type and
   the key.
+- **A MindFlock that runs from a git checkout with no branch checked out can
+  update.** A machine left on a detached HEAD at a release commit (here: a
+  `uv tool install -e` of a checkout nobody develops in) was skipped by
+  Update all my devices as a "development checkout" and refused by its own
+  updater. When HEAD is on the default branch's upstream, tracked files are
+  clean and a local `main` (if any) is not ahead, the update now puts the
+  checkout on `main` at the commit it is on — no file moves, nothing
+  discarded — then fast-forwards as usual; a rollback restores the detached
+  HEAD and the branch exactly. Update all my devices updates such checkouts
+  like any other member, and one that can't says its own reason ("…has
+  uncommitted changes…") instead of "development checkout".
 
 ## [0.14.26] - 2026-11-21
 

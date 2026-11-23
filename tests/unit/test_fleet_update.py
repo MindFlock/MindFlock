@@ -183,7 +183,17 @@ async def test_blocked_offline_old_and_current_members_are_skipped_not_fatal(
             "rig": {},
         },
     )
-    f.on_apply = {"old": (404, None)}
+    why = (
+        "This is a development checkout on branch foo. Updates apply when it "
+        "is on main with nothing uncommitted."
+    )
+    f.on_apply = {
+        "old": (404, None),
+        "dev": (
+            409,
+            {"ok": False, "blocked": True, "install": "editable", "error": why},
+        ),
+    }
     f.boots = {"rig": {"after": 1, "commit": "a" * 40}}
     doc = await _rollout()
     assert doc["state"] == "done"
@@ -192,11 +202,48 @@ async def test_blocked_offline_old_and_current_members_are_skipped_not_fatal(
     assert steps["old"] == "skipped" and steps["same"] == "current"
     assert steps["rig"] == "done"
     detail = {r["key"]: r["detail"] for r in doc["members"]}
-    assert "development checkout" in detail["dev"] and "git" not in detail["dev"]
+    # The checkout's OWN sentence, not a generic "development checkout".
+    assert detail["dev"] == why
     assert detail["gone"] == "offline"
     assert "too old" in detail["old"]
-    # The fleet key never went to the blocked or offline ones.
-    assert ("apply", "dev") not in f.log and ("apply", "gone") not in f.log
+    # A checkout is asked (it may well update); offline ones never are.
+    assert ("apply", "dev") in f.log and ("apply", "gone") not in f.log
+
+
+@pytest.mark.asyncio
+async def test_a_checkout_member_that_can_update_is_updated_like_any_other(
+    monkeypatch,
+):
+    """ML-Rig-2023: an editable install of a checkout. It answers with the
+    commit its own branch moves to; done once its hello reports it."""
+    tip = "c" * 40
+    f = _Fleet(monkeypatch, {"rig": {"install": "editable"}})
+    f.on_apply = {
+        "rig": (
+            200,
+            {
+                "ok": True,
+                "dev": True,
+                "ref": "main",
+                "commit": tip,
+                "version": "9.9.10",
+            },
+        )
+    }
+    f.boots = {"rig": {"after": 1, "commit": tip}}
+    doc = await _rollout()
+    assert doc["state"] == "done", doc
+    assert _steps(doc)["rig"] == "done"
+    assert ("apply", "rig") in f.log
+
+
+@pytest.mark.asyncio
+async def test_an_old_checkout_member_without_a_reason_gets_the_fallback(monkeypatch):
+    f = _Fleet(monkeypatch, {"dev": {"install": "editable"}})
+    f.on_apply = {"dev": (409, {"ok": False, "blocked": True, "install": "editable"})}
+    doc = await _rollout()
+    row = doc["members"][0]
+    assert row["step"] == "skipped" and "git checkout" in row["detail"]
 
 
 @pytest.mark.asyncio
@@ -518,13 +565,81 @@ async def test_apply_refuses_what_check_remote_ref_refuses(monkeypatch):
     assert status == 400 and out["ok"] is False
 
 
-@pytest.mark.asyncio
-async def test_apply_on_a_dev_checkout_answers_blocked(monkeypatch):
-    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
-    monkeypatch.setattr(self_update, "blocked_reason", lambda: "dev checkout")
+def _dev_status(monkeypatch, **st):
+    from backend.web.core import dev_update
+
+    base = {
+        "checkout": "/x",
+        "branch": "main",
+        "default_branch": "main",
+        "dirty": False,
+        "behind": 0,
+        "ahead": 0,
+        "can_update": True,
+        "why_not": "",
+        "head": "1" * 40,
+        "target": "2" * 40,
+        "target_version": "9.9.10",
+        "attach": None,
+    }
+    base.update(st)
+    monkeypatch.setattr(dev_update, "status", lambda *a, **k: dict(base))
     monkeypatch.setattr(self_update, "install_kind", lambda: "editable")
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    monkeypatch.setattr(
+        self_update, "start_update", lambda tag: pytest.fail("installed a release")
+    )
+    return base
+
+
+@pytest.mark.asyncio
+async def test_apply_on_a_checkout_that_cannot_update_says_its_own_why(monkeypatch):
+    why = "This development checkout has uncommitted changes. Updates apply …"
+    _dev_status(monkeypatch, can_update=False, why_not=why, behind=3)
+    monkeypatch.setattr(
+        self_update,
+        "start_dev_update",
+        lambda **k: pytest.fail("updated a checkout that can't"),
+    )
     out, status = await fleet_update.apply({"tag": "v9.9.9"})
     assert status == 409 and out["blocked"] is True and out["install"] == "editable"
+    assert out["error"] == why
+
+
+@pytest.mark.asyncio
+async def test_apply_on_a_checkout_that_can_update_moves_its_branch(monkeypatch):
+    st = _dev_status(
+        monkeypatch,
+        branch="",
+        behind=2,
+        attach={"branch": "main", "create": True, "from": ""},
+    )
+    seen = []
+    monkeypatch.setattr(
+        self_update,
+        "start_dev_update",
+        lambda **k: seen.append(k) or {"ok": True},
+    )
+    out, status = await fleet_update.apply({"tag": "v9.9.9"})
+    assert status == 200 and out["ok"] is True and out["dev"] is True
+    assert out["commit"] == st["target"] and out["version"] == "9.9.10"
+    assert out["ref"] == "main" and seen == [{}]
+
+
+@pytest.mark.asyncio
+async def test_apply_on_an_up_to_date_checkout_is_current(monkeypatch):
+    _dev_status(monkeypatch, behind=0)
+    monkeypatch.setattr(
+        self_update, "start_dev_update", lambda **k: pytest.fail("nothing to do")
+    )
+    out, status = await fleet_update.apply({"tag": "v9.9.9"})
+    assert status == 200 and out["current"] is True and out["dev"] is True
+
+
+def test_member_state_of_a_checkout_names_its_own_why(monkeypatch):
+    why = "This is a development checkout on branch foo. Updates apply …"
+    _dev_status(monkeypatch, can_update=False, why_not=why)
+    assert fleet_update.member_state()["blocked"] == why
 
 
 @pytest.mark.asyncio
@@ -637,3 +752,22 @@ def test_the_member_routes_pass_the_gate_to_their_own_key_check():
     assert ("GET", "/api/fleet/update/state") in auth._MEMBER_FLEET_ROUTES
     # The origin is NOT a member route: it is the owner's, behind the gate.
     assert ("POST", "/api/fleet/update") not in auth._MEMBER_FLEET_ROUTES
+
+
+@pytest.mark.asyncio
+async def test_this_device_as_a_checkout_says_its_own_why(monkeypatch):
+    why = "This development checkout has uncommitted changes. Updates apply …"
+    _dev_status(monkeypatch, can_update=False, why_not=why, behind=1)
+    _Fleet(monkeypatch, {})
+    doc = await _rollout()
+    me = [r for r in doc["members"] if r["self"]][0]
+    assert me["step"] == "skipped" and me["detail"] == why
+
+
+@pytest.mark.asyncio
+async def test_this_device_as_an_up_to_date_checkout_is_current(monkeypatch):
+    _dev_status(monkeypatch, behind=0)
+    _Fleet(monkeypatch, {})
+    doc = await _rollout()
+    me = [r for r in doc["members"] if r["self"]][0]
+    assert me["step"] == "current" and "own branch" in me["detail"]

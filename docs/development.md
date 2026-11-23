@@ -87,6 +87,21 @@ build — do not defeat the check). It updates from git instead
   development checkout on branch foo. Updates apply when it is on main with
   nothing uncommitted."). Working on a feature branch in the same checkout is
   therefore always safe.
+- **No branch checked out** (a detached HEAD — a machine left at a release
+  commit by hand) updates too when nothing can be lost: HEAD is an ancestor
+  of (or equal to) the default branch's upstream tip, nothing uncommitted in
+  tracked files, and a local default branch, if any, is HEAD or behind it.
+  The update first attaches the checkout to that branch AT the commit it is
+  on (the branch is created there, or fast-forwarded up to HEAD; then HEAD
+  points at it — no file moves, nothing is discarded), then fast-forwards as
+  above; a rollback puts it back exactly (detached at the old commit, the
+  local branch deleted again or where it was). Anything else keeps the
+  refusal, with one sentence saying what to do ("…is at a commit that is not
+  on main; switch it to main (git switch main) to get updates."). The same
+  rule lets **Update all my devices** update such a machine: a member that
+  runs from a checkout (a `uv tool install -e <checkout>` counts — the code
+  runs from the checkout) moves forward on its own branch, and one that
+  can't says its own reason instead of "development checkout".
 - **The update**: `git fetch`, `git merge --ff-only <the fetched tip>`, then
   `uv pip install --python <the server's interpreter> --reinstall-package
   mindflock -e "<checkout>[web]"` (pip when there is no uv) — it adds new

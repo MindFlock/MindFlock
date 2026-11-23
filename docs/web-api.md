@@ -2998,7 +2998,7 @@ would let a gate-off member launder strangers into gated ones.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, install_id, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`; for a development checkout its HEAD — both read once at boot, `""` when unknown), so two builds that both say the same version can be told apart; `version` is a checkout's own `pyproject.toml` version (its install metadata goes stale after a pull); `install` is how it is installed (`uv-tool`·`editable`·`other` — whether "Update all my devices" can update it: a development checkout is always skipped, it follows its own branch); `install_id` a 16-hex fingerprint of where the engine is installed (no path), by which `mindflock update`/`restart` find the server of their own install; `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings); a device whose tailnet identity isn't resolved yet reports `false` for itself). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Your devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, install_id, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`; for a development checkout its HEAD — both read once at boot, `""` when unknown), so two builds that both say the same version can be told apart; `version` is a checkout's own `pyproject.toml` version (its install metadata goes stale after a pull); `install` is how it is installed (`uv-tool`·`pipx`·`editable`·`other`). `editable` means the running code lives in a git checkout — a `uv tool install -e <checkout>` (or `pip install -e`) is one too, even when nobody develops there, because `backend` is imported from the checkout, not from site-packages; such a member updates from its own default branch, not from a release tag (see Update all my devices); `install_id` a 16-hex fingerprint of where the engine is installed (no path), by which `mindflock update`/`restart` find the server of their own install; `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings); a device whose tailnet identity isn't resolved yet reports `false` for itself). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Your devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state: `{self: {device, host, os}, remote_control, devices: [{device, host, os, ip, version, shared_link, reachable, remote_control, auth, has_token, needs_token, connected, error, sessions, member, fleet_proto, in_fleet, same_fleet}]}`. `member` = on this device's "Your devices" roster, `in_fleet` = in any group, `same_fleet` = in this one; a member never `needs_token` (the fleet key opens it) |
 | POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Your devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
@@ -3293,10 +3293,14 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   that member's own hello reports the new commit (or, without one, the new
   version) and only then moves on; the first member that fails, rolls back
   (its installer's health check) or doesn't come back halts the rollout.
-  Members that are offline, already current, a development checkout (it
-  follows its own branch and updates itself) or not installed by install.sh
-  (hello `install`), or too old for the route (404) are skipped with the
-  reason. → the rollout; 409 while one runs, 400 outside a group or
+  A member that runs from a git checkout (hello `install: editable`) is
+  asked too: it moves forward on its own default branch, as its own Update
+  button would — attaching a checkout that has no branch checked out first
+  when that is safe ([self-update](#self-update)) — and the rollout waits
+  for its hello to report the commit it named. Members that are offline,
+  already current, a checkout that can't update (its own `why_not`: another
+  branch, uncommitted changes, diverged), not installed by install.sh, or
+  too old for the route (404) are skipped with the reason. → the rollout; 409 while one runs, 400 outside a group or
   for a refused tag, 502 when GitHub can't name the newest release.
 - `GET /api/fleet/update` → `{state: idle·running·done·halted, tag, version,
   error, started_at, finished_at, members: [{key, host, self, step, detail,
@@ -3316,9 +3320,11 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   release) through the same detached installer as `/api/update/start` → `{ok,
   ref, commit}` or `{ok: true, current: true}` when already on it; 400 for
   anything but a published release tag at or above its own version, 409
-  `{blocked: true, install, error}` for a development checkout (always — it
-  never takes a release tag) / non-install.sh engine
-  (or an install already running). `GET /api/fleet/update/state` → `{version,
+  `{blocked: true, install, error}` for a non-install.sh engine (or an
+  install already running). A git checkout never takes the tag: it starts
+  its own dev update → `{ok, dev: true, ref: <branch>, commit: <its
+  upstream tip>, version}`, `{ok, current, dev}` when its branch has nothing
+  new, or 409 `{blocked, install: "editable", error: <its why_not>}`. `GET /api/fleet/update/state` → `{version,
   commit, install, blocked, state, ref, error, restart_pending}`. Both answer
   401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 

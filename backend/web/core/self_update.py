@@ -1319,7 +1319,9 @@ def start_dev_update(*, auto: bool = False) -> dict:
     started_at = time.time()
     from_version = installed_version()
     version = st.get("target_version") or from_version
-    ref = st["branch"]
+    # A checkout with no branch checked out is put on its default branch
+    # first (dev_update.attach_plan): that branch is what it follows.
+    ref = st["branch"] or str((st.get("attach") or {}).get("branch") or "")
     script_path = _state_dir() / "update.sh"
     try:
         script_path.parent.mkdir(parents=True, exist_ok=True)
