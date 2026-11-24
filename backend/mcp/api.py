@@ -16,7 +16,10 @@ method. The final failure becomes a :class:`ToolError` naming the address.
 
 HTTP errors are not retried: :class:`client.ApiError` propagates for the tool
 to translate (most become a ``ToolError`` with the server's own message); a
-401/403 becomes a ``ToolError`` naming the auth problem at once.
+401/403 becomes a ``ToolError`` naming the auth problem at once. A 5xx other
+than 502/503/504 (upstream: peer offline, push refused, timeout) is marked
+``fault`` on its way out, so the failure it causes is reported as a MindFlock
+fault (:data:`backend.mcp.protocol.FAULT_HINT`).
 """
 
 from __future__ import annotations
@@ -37,6 +40,11 @@ NORMAL_RETRY_S = 5.0
 WAIT_RETRY_S = 120.0
 
 _IDEMPOTENT = ("GET",)
+
+#: 5xx statuses that name a failure UPSTREAM of MindFlock — a remote or peer
+#: that is offline, a push the remote refused, a model that timed out — not a
+#: MindFlock fault; every other 5xx is one (see :meth:`Api.request`).
+_UPSTREAM_5XX = (502, 503, 504)
 
 
 def quote_title(title: str) -> str:
@@ -176,6 +184,11 @@ class Api:
                     # carries a ``code`` — a secret file, not your item — and
                     # is the tool's to explain.)
                     raise ToolError(_auth_error(err, path, self.describe())) from None
+                if err.status >= 500 and err.status not in _UPSTREAM_5XX:
+                    # A MindFlock server fault: the ToolError a tool raises
+                    # while handling this carries it in __context__, and the
+                    # protocol layer offers report_issue (protocol.FAULT_HINT).
+                    err.fault = True
                 raise
             # Connection-level failure: forget the address (a restarted server
             # may come back elsewhere) and back off until the budget runs out.

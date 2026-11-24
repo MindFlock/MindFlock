@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agents offer to report a MindFlock problem — and ask first.** When a
+  MindFlock tool call fails because of a MindFlock fault (a crash inside the
+  tool, or a server error), the error the agent sees now ends with one line
+  asking it to tell you and offer to draft a report; it says so at most once
+  per session per kind of failure, and never for an ordinary refusal. The
+  `report_issue` tool's description now names the moments to offer (a tool
+  or screen not doing what its docs say, a server error, you complaining
+  about MindFlock, a workaround for a MindFlock limitation, an idea for
+  MindFlock) and tells the agent to offer in one line and draft only once
+  you say yes, so no draft — and no toast — arrives unasked.
+
 ## [0.14.30] - 2026-11-24
 
 ### Added
