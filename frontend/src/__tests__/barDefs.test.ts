@@ -34,11 +34,12 @@ describe("SIDEBAR_BARS labels", () => {
     // Verify is a stop on the route now, not a bar.
     expect(label("verify")).toBeUndefined();
     expect(label("assistant")).toBe("Assistant");
+    expect(label("hub")).toBe("Shared files");
     expect(label("prompts")).toBe("Prompts");
   });
 
-  it("keeps the owner's out-of-the-box set: Usage, Memory, Tickets and Assistant", () => {
-    expect(DEFAULT_VISIBLE_BARS).toEqual(["usage", "memory", "ingestion", "assistant"]);
+  it("keeps the owner's out-of-the-box set: Usage, Memory, Tickets, Assistant and Shared files", () => {
+    expect(DEFAULT_VISIBLE_BARS).toEqual(["usage", "memory", "ingestion", "assistant", "hub"]);
   });
 });
 
@@ -57,6 +58,8 @@ describe("orderedSections", () => {
       "pr-review",
       "issue-handling",
       "assistant",
+      // Shared files follows the Assistant (FOLLOWS) when the save never named it.
+      "hub",
     ]);
   });
   it("drops the retired Verify bar from a saved order", () => {
@@ -66,6 +69,7 @@ describe("orderedSections", () => {
   it("drops unknown keys from the saved order", () => {
     expect(orderedSections(["bogus", "assistant"])).toEqual([
       "assistant",
+      "hub",
       "usage",
       "memory",
       "ingestion",
@@ -91,6 +95,23 @@ describe("orderedSections", () => {
     const saved = orderedSections(["memory", "ingestion", SESSIONS_KEY, "usage"]);
     expect(saved[0]).toBe("memory");
     expect(saved.filter((k) => k === "memory")).toHaveLength(1);
+  });
+  it("puts Shared files right under the To-do bar, else under the Assistant", () => {
+    const TODO = EXT_BAR_PREFIX + "todo";
+    const DB = EXT_BAR_PREFIX + "dbclient";
+    // A fresh user with the To-do extension: Assistant, To-do, Shared files.
+    const fresh = orderedSections([], [TODO, DB]);
+    expect(fresh.indexOf("hub")).toBe(fresh.indexOf(TODO) + 1);
+    // A saved order from before Shared files was a row, To-do dragged to the top.
+    const saved = orderedSections([TODO, "usage", "assistant", SESSIONS_KEY], [TODO]);
+    expect(saved.slice(0, 2)).toEqual([TODO, "hub"]);
+    // To-do switched off: under the Assistant, wherever it was dragged.
+    const noTodo = orderedSections([SESSIONS_KEY, "assistant", "usage"]);
+    expect(noTodo.indexOf("hub")).toBe(noTodo.indexOf("assistant") + 1);
+    // Once the order names it, its saved place wins.
+    const placed = orderedSections(["hub", TODO, SESSIONS_KEY], [TODO]);
+    expect(placed[0]).toBe("hub");
+    expect(placed.filter((k) => k === "hub")).toHaveLength(1);
   });
   it("dedupes repeated keys, keeping the first occurrence", () => {
     expect(orderedSections(["usage", "usage"])).toEqual(DEFAULT_SECTION_ORDER);
@@ -134,6 +155,7 @@ describe("orderedSections with extension bars", () => {
       "pr-review",
       "issue-handling",
       "assistant",
+      "hub",
     ]);
   });
   it("keeps the saved place of an extension bar the order already mentions", () => {
@@ -170,6 +192,7 @@ describe("orderedBars", () => {
     expect(bars.map((b) => b.key)).toEqual([
       "prompts",
       "assistant",
+      "hub",
       "usage",
       "memory",
       "ingestion",

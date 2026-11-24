@@ -1,5 +1,6 @@
 /** Shared registry + ordering for the movable sidebar sections. The
- * customizable bars (Usage, Tickets, Pull requests, Issues, Assistant, Prompts)
+ * customizable bars (Usage, Tickets, Pull requests, Issues, Assistant, Shared
+ * files, Prompts)
  * are draggable; the session list is a fixed anchor (the SESSIONS_KEY
  * sentinel) that bars can be dropped above or below but which never itself
  * moves.
@@ -27,6 +28,10 @@ export const SIDEBAR_BARS: BarDef[] = [
   // (The Verify bar is gone: Verify is a stop on the route now. A saved order
   // or hidden list that still names "verify" is fine — unknown keys drop.)
   { key: "assistant", label: "Assistant" },
+  // Shared files (components/hub): Open and Add, with a calm count of what an
+  // agent or the phone added since you last looked. Internal key "hub" — the
+  // feature's internal name (/api/hub, hub.json, Alt+H's "hub" action).
+  { key: "hub", label: "Shared files" },
   // Saved prompts, one click from any session. Last so a saved order from
   // before it existed meets it right where the defaults put it (see LATE_BARS).
   { key: "prompts", label: "Prompts" },
@@ -38,10 +43,15 @@ export const SIDEBAR_BARS: BarDef[] = [
  * nothing suggests it exists — the rule extension bars already follow. */
 export const LATE_BARS = new Set(["prompts"]);
 
-/** Built-in bars added later that belong next to an older one: a saved order
- * that never mentioned the key gets it directly after its partner (Memory
- * under Usage, wherever the person dragged Usage), not tail-appended. */
-export const FOLLOWS: Record<string, string> = { memory: "usage" };
+/** Built-in bars added later that belong next to another one: an order that
+ * never mentioned the key (a saved one, or none at all) gets it directly after
+ * the first of its partners that is present (Memory under Usage, wherever the
+ * person dragged Usage), not tail-appended. Shared files sits under the To-do
+ * bar (an extension, so it may be off), else under the Assistant. */
+export const FOLLOWS: Record<string, string[]> = {
+  memory: ["usage"],
+  hub: ["ext:todo", "assistant"],
+};
 
 /** Bars shown out of the box to a brand-new user. Tickets is in here because
  * ticket ingestion is the headline feature — connecting a tracker is the first
@@ -52,7 +62,7 @@ export const FOLLOWS: Record<string, string> = { memory: "usage" };
  * Customize → Sidebar. Only applied when the user has never touched that
  * checklist (no persisted hiddenBars) — order and length carry no meaning,
  * this is only a membership set (see `defaultHiddenBars`). */
-export const DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant"];
+export const DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant", "hub"];
 
 /** Bars the calm first hour (lib/calm.ts) adds to the default hidden set —
  * set by the sidebar while the screen is calm, [] after. Module state rather
@@ -118,8 +128,6 @@ export function orderedSections(order: string[], extraKeys: string[] = []): stri
     if (!seen.has(key)) {
       // An empty saved order is "all defaults": nothing is late there.
       if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
-      else if (order.length && FOLLOWS[key] && out.includes(FOLLOWS[key]))
-        out.splice(out.indexOf(FOLLOWS[key]) + 1, 0, key);
       else out.push(key);
       seen.add(key);
     }
@@ -133,6 +141,16 @@ export function orderedSections(order: string[], extraKeys: string[] = []): stri
   if (missingExtras.length) {
     // The built-in pass above guarantees the anchor is present.
     out.splice(out.indexOf(SESSIONS_KEY), 0, ...missingExtras);
+  }
+  // Last, once every key has its place: a follower the order never mentioned
+  // moves right after its first partner present (FOLLOWS).
+  const said = new Set(order);
+  for (const [key, partners] of Object.entries(FOLLOWS)) {
+    if (said.has(key) || !out.includes(key)) continue;
+    const partner = partners.find((p) => p !== key && out.includes(p));
+    if (!partner) continue;
+    out.splice(out.indexOf(key), 1);
+    out.splice(out.indexOf(partner) + 1, 0, key);
   }
   return out;
 }

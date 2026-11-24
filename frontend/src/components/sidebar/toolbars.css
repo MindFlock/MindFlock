@@ -395,6 +395,74 @@
   border-color: var(--accent);
 }
 
+/* Shared files (HubBar.tsx): the Assistant row's anatomy, plus a calm count
+   of what an agent or your phone added since you last looked — the extension
+   bars' accent pill (.ext-badge), never the red of something that needs you.
+   It rides inside the label's flex:1 box, so the buttons never move. */
+#hub-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#hub-bar .hb-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+#hub-bar .hb-label-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#hub-bar .hb-new {
+  flex: none;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+#hub-bar .hb-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+#hub-bar .as-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+}
+
+#hub-bar .as-toggle:hover,
+#hub-bar .as-toggle.active {
+  border-color: var(--accent);
+}
+
 /* Prompts bar: ONE short row, label · "Paste ▾". The prompts live in the
    button's menu (PromptsMenu, styled with the ⏩ picker's .pb-menu), and a
    pick always goes to the focused session, so there is no target picker. */

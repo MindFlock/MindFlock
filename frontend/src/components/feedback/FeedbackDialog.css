@@ -136,23 +136,3 @@
   cursor: pointer;
   font-size: 12.5px;
 }
-
-/* The top bar's way in: quiet, beside the version. */
-#topbar .tb-feedback {
-  margin-left: 8px;
-  pointer-events: auto;
-  background: none;
-  border: 0;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-#topbar .tb-feedback:hover,
-#topbar .tb-feedback:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-}

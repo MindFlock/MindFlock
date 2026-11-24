@@ -133,7 +133,7 @@ def cmd_hub(args: argparse.Namespace) -> int:
         if not items:
             print(
                 "Nothing in Shared files yet. Add something: mindflock hub add FILE "
-                "(or drop/paste it in the app: ⋯ → Shared files)."
+                "(or drop/paste it in the app: the sidebar's Shared files)."
             )
             return 0
         for r in items:

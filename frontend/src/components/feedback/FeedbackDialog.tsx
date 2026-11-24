@@ -1,5 +1,5 @@
 /** The feedback box (lib/feedback.ts): tell the MindFlock developers about a
- * problem or an idea. Opens blank from the top bar or the palette, or on a
+ * problem or an idea. Opens blank from the sidebar's ? Help or the palette, or on a
  * draft an agent wrote (the MCP's `report_issue`). The person reads, edits
  * and presses Send; nothing leaves before that. What it says before Send:
  * where the report goes (a public GitHub issue), as whom, and the one line
