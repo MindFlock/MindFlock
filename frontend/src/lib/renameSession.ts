@@ -24,6 +24,7 @@ import { useUi } from "../state/store";
 import { renameCodemapSeen } from "./codemapSeen";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
+import { focusSpot, keepFocusAcrossRename, PANE_TERMINAL } from "./renameFocus";
 import { loadSkyLayout, renameSkyLine, saveSkyLayout, SKY_POS_KEY } from "./skyLayout";
 import { renameNodePos } from "./skyNodePos";
 import { toast } from "./toast";
@@ -236,11 +237,25 @@ export async function renameSession(title: string, name: string, opts: { plain?:
     return title;
   }
   if (next === title) return "";
+  // Where the keyboard is on this session: the rail row or Sky line whose
+  // name was edited has it now; the Rename dialog hands it back (to the
+  // terminal, say) only as it closes, so look again after the answer.
+  let spot = focusSpot(title);
   try {
     const r = await instApi<RenameAnswer>(title, "/rename", { json: { to: next } });
     const now = (r && typeof r.title === "string" && r.title) || next;
     if (r?.unchanged || now === title) return "";
+    // The `session.renamed` event often lands before this answer, and its
+    // moveSessionTitle has then remounted everything under `now` already:
+    // look under both names. Nothing of the session's has it (a menu or the
+    // palette opened the dialog and is gone): the selected session's own
+    // terminal, if focus is lost by then — never taken from wherever else.
+    const sel = useUi.getState().focused;
+    spot = spot || focusSpot(title) || focusSpot(now) || (sel === title || sel === now ? PANE_TERMINAL : null);
     moveSessionTitle(title, now);
+    // The row, pane and line remount under the new title: the keyboard
+    // follows instead of falling to the page (lib/renameFocus).
+    keepFocusAcrossRename(spot, now);
     toast(`Renamed to “${now}”`);
     void refreshInstances();
     return now;

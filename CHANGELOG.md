@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.31] - 2026-11-24
+
+### Changed
+
+- **Agents offer to report a MindFlock problem — and ask first.** When a
+  MindFlock tool call fails because of a MindFlock fault (a crash inside the
+  tool, or a server error), the error the agent sees now ends with one line
+  asking it to tell you and offer to draft a report; it says so at most once
+  per session per kind of failure, and never for an ordinary refusal. The
+  `report_issue` tool's description now names the moments to offer (a tool
+  or screen not doing what its docs say, a server error, you complaining
+  about MindFlock, a workaround for a MindFlock limitation, an idea for
+  MindFlock) and tells the agent to offer in one line and draft only once
+  you say yes, so no draft — and no toast — arrives unasked.
+
+### Fixed
+
+- **Renaming a session keeps you on it.** The rail row, the grid pane and the
+  Sky line are keyed by the session's name, so a rename rebuilt them and the
+  keyboard fell to the page: the session stayed selected, but arrows, Delete
+  and typing no longer reached it. The keyboard now lands back on the
+  renamed session, on the same kind of element it was on: the rail row after
+  F2, the Sky line after renaming from its bar, and the terminal after the
+  Rename dialog. It is left alone if you have clicked elsewhere meanwhile.
+  Enter or Escape in the rail's rename box also returns to the row now, even
+  when the name did not change.
+
 ## [0.14.30] - 2026-11-24
 
 ### Added
@@ -7648,7 +7675,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.30...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.31...HEAD
+[0.14.31]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.31
 [0.14.30]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.30
 [0.14.29]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.29
 [0.14.28]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.28

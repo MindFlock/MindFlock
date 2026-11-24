@@ -1868,6 +1868,30 @@ expanded to the path, name and kind.
 hit, or an idea or feedback they voiced. `kind` is `bug` (default), `idea` or
 `feedback`.
 
+- **Offer first, draft on yes.** Every draft pops a toast in the app, so an
+  agent never drafts unprompted: it offers in chat — once per problem, one
+  line, at a natural pause, without derailing the task — and calls the tool
+  only when the person agrees (or asked to report in the first place). The
+  description names the moments to offer: a MindFlock tool, CLI or UI
+  behaved differently from what its docs or messages say; a tool returned
+  an internal or server error; the person complains about MindFlock ("this
+  is broken", "why does MindFlock keep…"); the agent had to work around a
+  MindFlock limitation; the person voices an idea for MindFlock. The server
+  instructions carry the same rule in one line.
+- **Faults say so.** A tool call that fails because of a MindFlock fault —
+  the handler crashed (`internal error in <tool>: …`), or the server answered
+  a 5xx other than 502/503/504 (those name an upstream failure: a peer
+  offline, a push the remote refused, a timeout) — ends its error text with
+  one more line: *This looks like a MindFlock fault, not yours: tell the
+  user and offer (one line) to draft a report with the report_issue tool;
+  draft it only if they agree.* That reaches every agent CLI, not only Claude. It is
+  added at most once per MCP server process per (tool, error kind), so a
+  failure in a loop doesn't nag; never to an ordinary refusal (not found,
+  out of scope, invalid arguments, a 4xx), never to `report_issue`'s own
+  failure, and not in peer mode (no `report_issue` there). In code: a
+  `ToolError(..., fault=True)`, or any `ToolError` raised while handling an
+  `ApiError` that `Api.request` marked `fault`
+  (`backend/mcp/protocol.py` `FAULT_HINT`).
 - **It only drafts.** The server stores the draft (`POST
   /api/feedback/drafts`) and the app offers it in the feedback box; the
   person reads it, edits it and presses **Send**. An agent cannot file the
