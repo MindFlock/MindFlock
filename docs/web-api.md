@@ -3010,6 +3010,42 @@ device: a guest link and a request another MindFlock relayed get 403.
   title uses its first line. 400 when both are empty. Keys and tokens are
   replaced with `[removed]` before anything is sent.
 
+## Help (`/api/help`)
+
+Ask how something works (`backend/web/core/help_ask.py`, `routes/help.py`):
+a question about MindFlock typed into the sidebar's ? Help box, answered from
+`docs/*.md`. Owner only: a guest link gets 403 (and the guest middleware's
+allow-list has no `/api/help` path, so its question never reaches the route).
+
+- `POST /api/help/ask` `{question, places?: [{id, label}]}` → `{text, found,
+  source: {doc, heading, path, excerpt} | null, model, pointers: [id],
+  limited}`. The passages are voice help's (`core.voice_help.search`, the
+  same BM25 index) read 16 deep and re-ranked for a reader: a builder's
+  section (a round's contract, as-built notes, CSS classes, a heading naming
+  a source file, or a passage opening "Round N …") scores ×0.45, `cli.md` and
+  `peer-link.md` ×0.6, `devices-anywhere.md` ×0.7, and a passage scoring
+  under 3 or holding under half of the question's weight (each word but a
+  bare number weighted by its rarity in the docs) is dropped — so a question
+  that only brushes the docs finds nothing. The best four go to the same ONE
+  model call voice help makes (`claude --model claude-haiku-5-5 -p`, MCP
+  stripped, the neutral one-shot dir, 20 s), told to answer in at most
+  four short sentences or numbered steps (backticks only around a control's
+  exact name) or say *I don't know*, and — when `places` were sent — to end
+  with `PLACES: id, id` naming up to three of them. `pointers` are only ids
+  from the request's `places` (well-formed ones: `[a-z0-9._:-]`, at most 64
+  characters, labels cut to 90, at most 160 places); every other id is
+  dropped. `model` false (the model missing, failing, timing out, saying
+  nothing, never under pytest): `text` is the best passage's first two
+  sentences, links and bold off, inline code kept, a sentence or parenthesis
+  that is mostly code left out. More than 8 model calls in 60 s, or 2 at
+  once: the same docs-only answer with `limited: true`. Nothing matching →
+  `found: false`, "The MindFlock docs don't cover that."; the model saying it
+  doesn't know → `found: false`, "The MindFlock docs don't say." (`source`
+  null both); no docs folder → "The MindFlock docs aren't on this computer…".
+  Worded answers are kept per question and place list (64 per process).
+  **400** without a non-empty string `question` (cut to 400 characters).
+  `POST /api/voice/help` is unchanged.
+
 ## Shared files (`/api/hub`)
 
 Shared files (internally "the hub": `core/hub.py`, routes in

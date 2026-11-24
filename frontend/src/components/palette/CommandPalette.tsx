@@ -40,6 +40,7 @@ import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 import { openWhatsNew } from "../whatsNew/WhatsNew";
 import { openFeedback } from "../../lib/feedback";
+import { openAskHelp } from "../../lib/helpAsk";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -243,6 +244,15 @@ export function buildPaletteActions({ config, host, extensions }: PaletteSources
     });
   acts.push({ label: "Open Settings", top: TOP.settings, run: () => openSettings() });
   acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+  // Ask how something works (lib/helpAsk): the docs' answer and pointers at
+  // the real UI. Never for a guest (the server refuses one too).
+  if (!config?.guest)
+    acts.push({
+      label: "Ask how something works…",
+      hint: "an answer from the docs, and where it is",
+      keywords: "help how where question ask docs explain find learn what does",
+      run: () => openAskHelp(),
+    });
   acts.push({
     label: "Send feedback or report a problem…",
     hint: "to the MindFlock developers",

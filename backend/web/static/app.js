@@ -27694,9 +27694,9 @@ var PANE_BUTTONS = [
 	}
 ];
 var PANE_ITEMS = [...PANE_TABS, ...PANE_BUTTONS];
-var BY_ID = new Map(PANE_ITEMS.map((d) => [d.id, d]));
+var BY_ID$1 = new Map(PANE_ITEMS.map((d) => [d.id, d]));
 function paneItemDef(id) {
-	return BY_ID.get(id);
+	return BY_ID$1.get(id);
 }
 function asPaneHeaderPref(v) {
 	if (!v || typeof v !== "object" || Array.isArray(v)) return null;
@@ -53032,6 +53032,26 @@ function bridgeFeedbackEvents() {
 	});
 }
 //#endregion
+//#region src/lib/helpAsk.ts
+var useAskHelp = create((set, get) => ({
+	open: false,
+	n: 0,
+	pointing: null,
+	show: () => set({
+		open: true,
+		pointing: null,
+		n: get().n + 1
+	}),
+	close: () => set({
+		open: false,
+		pointing: null
+	}),
+	setPointing: (p) => set({ pointing: p })
+}));
+function openAskHelp() {
+	useAskHelp.getState().show();
+}
+//#endregion
 //#region src/components/palette/CommandPalette.tsx
 var PALETTE_ACTIONS = [
 	"rename",
@@ -53235,6 +53255,12 @@ function buildPaletteActions({ config, host, extensions }) {
 	acts.push({
 		label: "Open Doctor",
 		run: () => host.openDoctor()
+	});
+	if (!config?.guest) acts.push({
+		label: "Ask how something works…",
+		hint: "an answer from the docs, and where it is",
+		keywords: "help how where question ask docs explain find learn what does",
+		run: () => openAskHelp()
 	});
 	acts.push({
 		label: "Send feedback or report a problem…",
@@ -58494,7 +58520,7 @@ async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 		}
 		case "help": {
 			deps.caption(HELP_LOOKING_LINE);
-			const said = (await askHelp(r.text || text)).say;
+			const said = (await askHelp$1(r.text || text)).say;
 			(deps.speak || deps.announce)(said);
 			return true;
 		}
@@ -58503,7 +58529,7 @@ async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 }
 var HELP_LOOKING_LINE = "Looking that up…";
 var HELP_FAILED_LINE = "Couldn't look that up.";
-async function askHelp(text) {
+async function askHelp$1(text) {
 	try {
 		const j = await api("/api/voice/help", { json: { text } });
 		if (j && typeof j.say === "string" && j.say.trim()) return j;
@@ -74154,6 +74180,12 @@ function HelpMenu() {
 	const draftLine = drafts === 1 ? "An agent drafted a report for you to read" : drafts + " reports drafted by an agent wait for you to read";
 	const rows = [
 		!guest && {
+			key: "ask",
+			label: "Ask how something works…",
+			title: "Ask a question about MindFlock: an answer from its docs, and where to find it",
+			run: () => openAskHelp()
+		},
+		!guest && {
 			key: "feedback",
 			label: "Send feedback…",
 			title: drafts > 0 ? draftLine : "Tell us about a problem or an idea",
@@ -74187,7 +74219,7 @@ function HelpMenu() {
 		id: "help-btn",
 		type: "button",
 		className: "foot-link" + (drafts > 0 ? " has-draft" : ""),
-		title: "Help — send feedback, keyboard shortcuts, what's new" + (drafts > 0 ? "\n" + draftLine : ""),
+		title: "Help — ask how something works, send feedback, keyboard shortcuts, what's new" + (drafts > 0 ? "\n" + draftLine : ""),
 		"aria-label": drafts > 0 ? "Help, " + draftLine.toLowerCase() : "Help",
 		"aria-haspopup": "menu",
 		"aria-expanded": open,
@@ -96786,6 +96818,7 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 	const cardRef = (0, import_react.useRef)(null);
 	const step = steps[i];
 	const last = i >= steps.length - 1;
+	const single = steps.length === 1;
 	const contained = !!rootRef;
 	const measure = (0, import_react.useCallback)(() => {
 		if (!step) return;
@@ -96958,13 +96991,9 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: c("head"),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: c("step"),
-						children: [
-							i + 1,
-							" of ",
-							steps.length
-						]
+						children: single ? "" : `${i + 1} of ${steps.length}`
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: c("skip"),
@@ -96986,9 +97015,9 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: c("dots"),
 							"aria-hidden": "true",
-							children: steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
+							children: !single && steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						!single && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: buttonClass + " " + c("back"),
 							disabled: i === 0,
@@ -153426,11 +153455,11 @@ function filterParents(choices, q) {
 		return words.every((w) => hay.includes(w));
 	});
 }
-function slug(text) {
+function slug$1(text) {
 	return (text || "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 function workerTitle(parent, taken) {
-	const s = slug(parent).slice(0, 40);
+	const s = slug$1(parent).slice(0, 40);
 	const prefix = s ? s + "-w" : "worker-";
 	const used = new Set(taken);
 	let n = 1;
@@ -163436,6 +163465,1012 @@ function Box({ want, onClose }) {
 	});
 }
 //#endregion
+//#region src/lib/helpPlaces.ts
+function tourTarget(tour, hook) {
+	const attr = "data-tour=\"" + hook + "\"";
+	const steps = TOURS[tour]?.steps || [];
+	const step = steps.find((s) => s.target.split(",")[0].includes(attr)) || steps.find((s) => s.target.includes(attr));
+	return step ? step.target : "";
+}
+var slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+function settingsPlace(e) {
+	const parts = e.label.split(" → ");
+	return {
+		id: "settings." + e.key + (parts.length > 1 ? "." + slug(parts.slice(1).join(" ")) : ""),
+		label: "Settings → " + e.label,
+		caption: e.sub.replace(/\.$/, "") + ".",
+		keywords: ["settings", ...e.terms],
+		target: e.anchor ? "#settings-screens " + e.anchor : ".set-nav-item[data-screen=\"" + e.key + "\"], #settings-screens [data-screen=\"" + e.key + "\"]",
+		reach: {
+			kind: "settings",
+			screen: e.key,
+			advanced: e.advanced
+		},
+		how: "Open Settings (the ⚙ in the top bar) and pick " + parts.join(" → ") + "."
+	};
+}
+var UI_PLACES = [
+	{
+		id: "topbar.new",
+		label: "New session (top bar)",
+		caption: "Start a session: say what to do and pick a folder; the agent works on its own branch.",
+		keywords: [
+			"new",
+			"new session",
+			"start",
+			"create",
+			"begin",
+			"launch",
+			"agent",
+			"task",
+			"run an agent",
+			"start a session"
+		],
+		target: "#new-btn",
+		reach: { kind: "none" },
+		how: "Click + New in the top bar, or press Alt+N."
+	},
+	{
+		id: "new.task",
+		label: "New session → the task box",
+		caption: "Describe the work in a sentence here; the folder and the start button sit just below.",
+		keywords: [
+			"describe",
+			"task",
+			"prompt",
+			"what to do",
+			"new session",
+			"start a session",
+			"first session"
+		],
+		target: tourTarget("new", "new-task"),
+		reach: {
+			kind: "dialog",
+			dialog: "new-session"
+		},
+		how: "Click + New in the top bar and type the task in the first box."
+	},
+	{
+		id: "topbar.intake",
+		label: "Intake (top bar)",
+		caption: "Tickets, pull requests and issues waiting to become sessions, and what starts on its own.",
+		keywords: [
+			"intake",
+			"tickets",
+			"ticket",
+			"jira",
+			"linear",
+			"shortcut",
+			"asana",
+			"issues",
+			"pull requests",
+			"prs",
+			"queue",
+			"sources",
+			"auto-start"
+		],
+		target: "#intake-btn, #more-btn",
+		reach: { kind: "none" },
+		how: "Click Intake in the top bar (in a narrow window it is under ⋯), or press Alt+I."
+	},
+	{
+		id: "intake.sources",
+		label: "Intake → add a source",
+		caption: "Connect a ticket tracker or GitHub here, then pick the repo its work lands in.",
+		keywords: [
+			"add source",
+			"connect",
+			"tracker",
+			"ticket source",
+			"github issues",
+			"jira",
+			"linear",
+			"shortcut",
+			"asana",
+			"intake"
+		],
+		target: tourTarget("intake", "intake-tiles"),
+		reach: {
+			kind: "dialog",
+			dialog: "intake"
+		},
+		how: "Open Intake from the top bar; the sources are at the top."
+	},
+	{
+		id: "intake.autostart",
+		label: "Intake → Auto-start",
+		caption: "What starts sessions on its own: new tickets, review comments, new issues.",
+		keywords: [
+			"auto-start",
+			"autostart",
+			"automatic",
+			"automatically",
+			"on its own",
+			"start on their own",
+			"intake"
+		],
+		target: tourTarget("intake", "intake-autostart"),
+		reach: {
+			kind: "dialog",
+			dialog: "intake",
+			tab: "autostart"
+		},
+		how: "Open Intake from the top bar and pick the Auto-start tab."
+	},
+	{
+		id: "topbar.schedule",
+		label: "Schedule (top bar)",
+		caption: "Templates that start sessions on their own: daily, on weekdays, once or by cron.",
+		keywords: [
+			"schedule",
+			"scheduled",
+			"template",
+			"templates",
+			"cron",
+			"recurring",
+			"daily",
+			"nightly",
+			"weekly",
+			"timer",
+			"every day"
+		],
+		target: "#schedule-btn, #more-btn",
+		reach: { kind: "none" },
+		how: "Click Schedule in the top bar (in a narrow window it is under ⋯), or press Alt+S."
+	},
+	{
+		id: "schedule.new",
+		label: "Schedule → new template",
+		caption: "Make a template here: a name, a folder, the task, and when it runs.",
+		keywords: [
+			"new template",
+			"make a template",
+			"create template",
+			"schedule a template",
+			"template",
+			"cron"
+		],
+		target: tourTarget("schedule", "schedule-new"),
+		reach: {
+			kind: "dialog",
+			dialog: "schedule"
+		},
+		how: "Open Schedule from the top bar and click New template."
+	},
+	{
+		id: "topbar.settings",
+		label: "Settings (top bar)",
+		caption: "Every setting, with a search box at the top that finds any of them by a word.",
+		keywords: [
+			"settings",
+			"preferences",
+			"options",
+			"configure",
+			"config",
+			"gear"
+		],
+		target: "#settings-btn, #more-btn",
+		reach: { kind: "none" },
+		how: "Click ⚙ Settings in the top bar, or press Ctrl+,."
+	},
+	{
+		id: "settings.search",
+		label: "Settings → search",
+		caption: "Type a word like dark, phone or parallel and jump straight to that setting.",
+		keywords: [
+			"search settings",
+			"find a setting",
+			"settings search",
+			"setting"
+		],
+		target: "#settings-search",
+		reach: {
+			kind: "settings",
+			screen: "connections"
+		},
+		how: "Open Settings; the search box is at the top of its list of screens."
+	},
+	{
+		id: "topbar.palette",
+		label: "Command palette (top bar)",
+		caption: "Every command and session by name: type a few letters and press Enter.",
+		keywords: [
+			"command palette",
+			"palette",
+			"commands",
+			"command",
+			"search",
+			"find",
+			"launcher",
+			"quick open",
+			"ctrl+p",
+			"ctrl+k"
+		],
+		target: "#palette-btn",
+		reach: { kind: "none" },
+		how: "Press Ctrl+P (Cmd+P on a Mac), or click the search box at the top bar's right end."
+	},
+	{
+		id: "topbar.theme",
+		label: "Light or dark (top bar)",
+		caption: "Switches between light and dark; colours and themes are in Settings → Appearance.",
+		keywords: [
+			"theme",
+			"dark",
+			"light",
+			"dark mode",
+			"light mode",
+			"night",
+			"moon",
+			"sun",
+			"colour",
+			"color",
+			"appearance"
+		],
+		target: "#theme-btn",
+		reach: { kind: "none" },
+		how: "Click the moon or sun in the top bar, or open Settings → Appearance."
+	},
+	{
+		id: "topbar.sidebar",
+		label: "Show or hide the sidebar (top bar)",
+		caption: "Shows or hides the list of sessions on the left; Ctrl+B does the same.",
+		keywords: [
+			"sidebar",
+			"hide sidebar",
+			"show sidebar",
+			"collapse",
+			"expand",
+			"rail",
+			"left panel",
+			"toggle sidebar"
+		],
+		target: "#sidebar-toggle",
+		reach: { kind: "none" },
+		how: "Click the sidebar button at the top bar's left end, or press Ctrl+B."
+	},
+	{
+		id: "topbar.bell",
+		label: "Notifications (the bell)",
+		caption: "What needs you: questions, finished work and failures, newest first.",
+		keywords: [
+			"bell",
+			"notifications",
+			"notification",
+			"alerts",
+			"needs you",
+			"inbox",
+			"what needs me",
+			"waiting for me"
+		],
+		target: "#notif-btn",
+		reach: { kind: "none" },
+		how: "Click the bell in the top bar."
+	},
+	{
+		id: "topbar.mic",
+		label: "Voice (the mic)",
+		caption: "Talk to the focused session; its options hold the wake word and spoken replies.",
+		keywords: [
+			"voice",
+			"mic",
+			"microphone",
+			"talk",
+			"speak",
+			"dictate",
+			"speech",
+			"wake word",
+			"say",
+			"spoken replies"
+		],
+		target: tourTarget("voice", "voice-mic"),
+		reach: { kind: "none" },
+		how: "Click the mic in the top bar."
+	},
+	{
+		id: "sidebar.sessions",
+		label: "Your sessions (sidebar)",
+		caption: "Every session, one row each: click a row to focus it, and its › menu holds commit, push and PR.",
+		keywords: [
+			"sessions",
+			"session list",
+			"rows",
+			"row",
+			"rail",
+			"list",
+			"my sessions",
+			"row menu",
+			"commit",
+			"push",
+			"pull request",
+			"close a session"
+		],
+		target: "li.inst, #instance-list",
+		reach: { kind: "sidebar" },
+		how: "Show the sidebar (Ctrl+B); the sessions are the rows at its top."
+	},
+	{
+		id: "sidebar.filter",
+		label: "Filter sessions (sidebar)",
+		caption: "Type part of a name to narrow the list of sessions.",
+		keywords: [
+			"filter",
+			"search sessions",
+			"find a session",
+			"narrow",
+			"filter sessions"
+		],
+		target: "#session-filter",
+		reach: { kind: "sidebar" },
+		how: "Show the sidebar (Ctrl+B) and type in the filter above the sessions, or press /."
+	},
+	{
+		id: "sidebar.views",
+		label: "Grid or Sky (sidebar foot)",
+		caption: "Shows every session as panes (Grid) or as routes on one canvas (Sky); Ctrl+Y switches.",
+		keywords: [
+			"grid",
+			"sky",
+			"view",
+			"views",
+			"switch view",
+			"panes",
+			"canvas",
+			"layout",
+			"ctrl+y"
+		],
+		target: "#view-modes",
+		reach: { kind: "sidebar" },
+		how: "Show the sidebar (Ctrl+B); Grid and Sky are at its foot. Ctrl+Y switches too."
+	},
+	{
+		id: "sidebar.help",
+		label: "? Help (sidebar foot)",
+		caption: "Send feedback, every keyboard shortcut, what's new, and this question box.",
+		keywords: [
+			"help",
+			"feedback",
+			"send feedback",
+			"report a bug",
+			"bug",
+			"problem",
+			"idea",
+			"what's new",
+			"release notes",
+			"shortcuts"
+		],
+		target: "#help-btn",
+		reach: { kind: "sidebar" },
+		how: "Show the sidebar (Ctrl+B); ? Help is at its bottom right."
+	},
+	{
+		id: "sidebar.customize",
+		label: "Customize (sidebar foot)",
+		caption: "Choose which bars the sidebar shows and what the pane header holds.",
+		keywords: [
+			"customize",
+			"customise",
+			"bars",
+			"sidebar bars",
+			"pane header",
+			"prompts bar",
+			"add a bar"
+		],
+		target: "#foot-customize-btn, #foot-customize",
+		reach: { kind: "sidebar" },
+		how: "Show the sidebar (Ctrl+B); ⚙ Customize is at its foot."
+	},
+	{
+		id: "sidebar.recent",
+		label: "Recently closed (sidebar)",
+		caption: "Reopen a session you closed, or clear what it left on disk.",
+		keywords: [
+			"recently closed",
+			"reopen",
+			"restore",
+			"undo close",
+			"closed sessions",
+			"bring back",
+			"deleted session"
+		],
+		target: "#recent-btn",
+		reach: { kind: "sidebar" },
+		how: "Press Ctrl+Shift+T to reopen the last one, or pick Recently closed… in the command palette."
+	},
+	{
+		id: "sidebar.setup",
+		label: "Setup checklist (sidebar foot)",
+		caption: "The steps to a first session: install your agent, sign in, pick a repo.",
+		keywords: [
+			"setup",
+			"set up",
+			"install",
+			"getting started",
+			"checklist",
+			"sign in",
+			"doctor",
+			"first run"
+		],
+		target: "#setup-chip",
+		reach: { kind: "sidebar" },
+		how: "Pick Open Setup checklist in the command palette (Ctrl+P)."
+	},
+	{
+		id: "pane.menu",
+		label: "A pane's menu (Grid)",
+		caption: "Each pane's tabs and ⋯ menu: the agent, a terminal, the diff, and what to do with the work.",
+		keywords: [
+			"pane",
+			"pane menu",
+			"tabs",
+			"terminal",
+			"diff",
+			"changes",
+			"files changed",
+			"pane header"
+		],
+		target: tourTarget("new", "pane-tabs"),
+		reach: {
+			kind: "view",
+			view: "grid"
+		},
+		how: "Switch to the Grid (Ctrl+Y) and look at the top of a session's pane."
+	},
+	{
+		id: "sky.shelf",
+		label: "Saved routes (the Sky's shelf)",
+		caption: "Routes you saved, ready to fly again; + adds a stop to a session's route.",
+		keywords: [
+			"route",
+			"routes",
+			"saved routes",
+			"shelf",
+			"stops",
+			"stop",
+			"chain",
+			"flight",
+			"flights",
+			"fly"
+		],
+		target: tourTarget("sky", "sky-shelf"),
+		reach: {
+			kind: "view",
+			view: "sky"
+		},
+		how: "Switch to the Sky (Ctrl+Y); the shelf is along its edge."
+	},
+	{
+		id: "sky.bird",
+		label: "The bird (Sky)",
+		caption: "Where a session is on its route: the stop it is flying now.",
+		keywords: [
+			"bird",
+			"where is my session",
+			"progress",
+			"current stop",
+			"flying"
+		],
+		target: tourTarget("sky", "flights-bird"),
+		reach: {
+			kind: "view",
+			view: "sky"
+		},
+		how: "Switch to the Sky (Ctrl+Y) and look along a session's route."
+	},
+	{
+		id: "hub.panel",
+		label: "Shared files",
+		caption: "Files, pictures and snippets every session can use; drop one in and send it to a session.",
+		keywords: [
+			"shared files",
+			"hub",
+			"files",
+			"share",
+			"upload",
+			"screenshot",
+			"image",
+			"picture",
+			"snippet",
+			"attach",
+			"paste"
+		],
+		target: "#hub-panel",
+		reach: { kind: "hub" },
+		how: "Press Alt+H, or pick Shared files… in the command palette."
+	}
+];
+var HELP_PLACES = (() => {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const p of [...UI_PLACES, ...SETTINGS_SEARCH.map(settingsPlace)]) {
+		if (seen.has(p.id)) continue;
+		seen.add(p.id);
+		out.push(p);
+	}
+	return out;
+})();
+var BY_ID = new Map(HELP_PLACES.map((p) => [p.id, p]));
+function placeById(id) {
+	return typeof id === "string" ? BY_ID.get(id) : void 0;
+}
+function placesForModel() {
+	return HELP_PLACES.map((p) => ({
+		id: p.id,
+		label: (p.label + " — " + p.caption).slice(0, 90)
+	}));
+}
+var STOP = new Set(`a an the and or but if then so of to in on at by for with from into onto about as is are was were be been being
+  do does did doing done have has had i me my we our you your it its this that these those there here what which who
+  whom whose when where why how can could should would will shall may might must not no yes any some all each every
+  one just also very more most than too only own same such get got make use using used way thing things mindflock
+  tell explain describe please there's what's how's where's show find see look go open work works working`.split(/\s+/));
+function stem(w) {
+	if (w.length > 4 && w.endsWith("ies")) return w.slice(0, -3) + "y";
+	if (w.length > 5 && w.endsWith("ing")) return w.slice(0, -3);
+	if (w.length > 4 && w.endsWith("ed")) return w.endsWith("ued") || w.endsWith("led") ? w.slice(0, -1) : w.slice(0, -2);
+	if (w.length > 3 && w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+	return w;
+}
+function terms(text) {
+	return (String(text || "").toLowerCase().match(/[a-z0-9+]+/g) || []).filter((w) => !STOP.has(w)).map(stem);
+}
+var _index = null;
+function index() {
+	if (_index) return _index;
+	const rows = HELP_PLACES.map((place) => ({
+		place,
+		label: new Set(terms(place.label)),
+		keys: new Set(place.keywords.flatMap(terms)),
+		caption: new Set(terms(place.caption)),
+		phrases: place.keywords.filter((k) => k.includes(" ")).map((k) => k.toLowerCase())
+	}));
+	const df = /* @__PURE__ */ new Map();
+	for (const r of rows) for (const t of /* @__PURE__ */ new Set([
+		...r.label,
+		...r.keys,
+		...r.caption
+	])) df.set(t, (df.get(t) || 0) + 1);
+	const n = rows.length;
+	const idf = /* @__PURE__ */ new Map();
+	for (const [t, c] of df) idf.set(t, Math.log(1 + (n - c + .5) / (c + .5)));
+	_index = {
+		rows,
+		idf
+	};
+	return _index;
+}
+var MATCH_MIN = 2.2;
+var MATCH_SHARE = .55;
+function scorePlaces(question) {
+	const { rows, idf } = index();
+	const q = [...new Set(terms(question))];
+	const text = " " + String(question || "").toLowerCase().replace(/[^a-z0-9+]+/g, " ") + " ";
+	return rows.map((r) => {
+		let s = 0;
+		for (const t of q) {
+			const w = idf.get(t) ?? 0;
+			if (r.label.has(t)) s += 3 * w;
+			else if (r.keys.has(t)) s += 2 * w;
+			else if (r.caption.has(t)) s += w;
+		}
+		for (const ph of r.phrases) if (text.includes(" " + ph.replace(/[^a-z0-9+]+/g, " ").trim() + " ")) s += 3;
+		return {
+			place: r.place,
+			score: s
+		};
+	});
+}
+function matchPlaces(question, n = 3) {
+	const scored = scorePlaces(question).filter((x) => x.score >= MATCH_MIN).sort((a, b) => b.score - a.score);
+	if (!scored.length) return [];
+	const top = scored[0].score;
+	return scored.filter((x) => x.score >= top * MATCH_SHARE).slice(0, n).map((x) => x.place);
+}
+function isWhereQuestion(question) {
+	return /^\s*(where('s| is| are| do i| can i| would i)?\b|show me\b|how do i (find|get to|open)\b|which button\b)/i.test(question);
+}
+function pointersFor(question, modelIds, n = 3) {
+	const fromModel = [];
+	for (const id of modelIds || []) {
+		const p = placeById(id);
+		if (p && !fromModel.includes(p)) fromModel.push(p);
+	}
+	return (fromModel.length ? fromModel : matchPlaces(question, n)).slice(0, n);
+}
+//#endregion
+//#region src/components/helpAsk/askApi.ts
+var STARTERS = [
+	"How do I schedule a template?",
+	"Where do I change the theme?",
+	"What does Goes as far as do?",
+	"How do I connect GitHub?"
+];
+var ASK_GAP_MS = 1200;
+var _lastSent = -Infinity;
+function takeAskSlot(now = Date.now()) {
+	const at = Math.max(now, _lastSent + ASK_GAP_MS);
+	_lastSent = at;
+	return at - now;
+}
+async function askHelp(question, signal) {
+	const q = question.trim();
+	return toAnswer(q, await api("/api/help/ask", {
+		method: "POST",
+		json: {
+			question: q,
+			places: placesForModel()
+		},
+		signal
+	}));
+}
+function toAnswer(question, raw) {
+	const r = raw && typeof raw === "object" ? raw : {};
+	const src = r.source && typeof r.source === "object" ? r.source : null;
+	const str = (v) => typeof v === "string" ? v : "";
+	const reply = {
+		text: str(r.text),
+		found: r.found === true,
+		source: src ? {
+			doc: str(src.doc),
+			heading: str(src.heading),
+			path: str(src.path),
+			excerpt: str(src.excerpt)
+		} : null,
+		model: r.model === true,
+		pointers: Array.isArray(r.pointers) ? r.pointers.filter((x) => typeof x === "string") : [],
+		limited: r.limited === true
+	};
+	return {
+		...reply,
+		question,
+		places: pointersFor(question, reply.pointers)
+	};
+}
+function reachPlace(place) {
+	const ui = useUi.getState();
+	const r = place.reach;
+	if (r.kind === "sidebar") {
+		if (ui.sidebarHidden) ui.toggleSidebar();
+	} else if (r.kind === "settings") {
+		if (r.advanced && !readAdvancedMode()) writeAdvancedMode(true);
+		openSettings(r.screen);
+	} else if (r.kind === "dialog") ui.openDialogFor(r.dialog, r.tab ?? null);
+	else if (r.kind === "view") {
+		if (ui.view !== r.view) setView(r.view);
+	} else if (r.kind === "hub") useHubUi.getState().setOpen(true);
+}
+function goToPlace(place, waitMs = 3e3) {
+	reachPlace(place);
+	return new Promise((resolve) => {
+		const t0 = Date.now();
+		const look = () => {
+			if (place.target && typeof document !== "undefined" && revealTarget(document, place.target)) return resolve(true);
+			if (Date.now() - t0 >= waitMs) return resolve(false);
+			setTimeout(look, 100);
+		};
+		setTimeout(look, 30);
+	});
+}
+//#endregion
+//#region src/components/helpAsk/AskHelp.tsx
+var QUESTION_MAX = 300;
+function inlineCode(line) {
+	return line.split("`").map((part, i) => i % 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: part }, i) : part);
+}
+function AnswerText({ text }) {
+	const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+	const out = [];
+	let steps = [];
+	const flush = () => {
+		if (!steps.length) return;
+		out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", { children: steps.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: inlineCode(s) }, i)) }, "ol" + out.length));
+		steps = [];
+	};
+	for (const l of lines) {
+		const m = /^\d+[.)]\s+(.*)$/.exec(l);
+		if (m) steps.push(m[1]);
+		else {
+			flush();
+			out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: inlineCode(l) }, "p" + out.length));
+		}
+	}
+	flush();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ask-answer-text",
+		children: out
+	});
+}
+function AskHelp() {
+	const guest = !!useConfig().data?.guest;
+	const open = useAskHelp((s) => s.open);
+	const n = useAskHelp((s) => s.n);
+	const pointing = useAskHelp((s) => s.pointing);
+	const [q, setQ] = (0, import_react.useState)("");
+	const [phase, setPhase] = (0, import_react.useState)({ kind: "idle" });
+	const [showPassage, setShowPassage] = (0, import_react.useState)(false);
+	const [coach, setCoach] = (0, import_react.useState)(null);
+	const abortRef = (0, import_react.useRef)(null);
+	const reqRef = (0, import_react.useRef)(0);
+	const inputRef = (0, import_react.useRef)(null);
+	const boxRef = (0, import_react.useRef)(null);
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const sidebarWidth = useUi((s) => s.sidebarWidth);
+	const narrow = useUi((s) => s.narrow);
+	(0, import_react.useEffect)(() => {
+		if (open && !pointing) inputRef.current?.focus({ preventScroll: true });
+	}, [
+		open,
+		n,
+		pointing
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!open) abortRef.current?.abort();
+	}, [open]);
+	(0, import_react.useLayoutEffect)(() => {
+		const place = () => {
+			const box = boxRef.current;
+			if (!box) return;
+			const W = window.innerWidth;
+			const side = document.getElementById("sidebar");
+			const r = !sidebarHidden && !narrow && side ? side.getBoundingClientRect() : null;
+			let left = r && r.width > 0 ? r.right + 8 : 8;
+			const w = Math.min(380, W - 16);
+			if (left + w > W - 8) left = Math.max(8, W - w - 8);
+			box.style.left = Math.round(left) + "px";
+			box.style.width = Math.round(w) + "px";
+		};
+		place();
+		window.addEventListener("resize", place);
+		return () => window.removeEventListener("resize", place);
+	}, [
+		open,
+		pointing,
+		sidebarHidden,
+		sidebarWidth,
+		narrow
+	]);
+	if (guest) return null;
+	const close = () => {
+		abortRef.current?.abort();
+		useAskHelp.getState().close();
+	};
+	const showPlace = async (place) => {
+		useAskHelp.getState().setPointing(place);
+		const ok = await goToPlace(place);
+		setCoach({
+			place,
+			ok
+		});
+	};
+	const endPointer = () => {
+		const place = coach?.place;
+		setCoach(null);
+		const k = place?.reach.kind;
+		if (k === "settings" || k === "dialog" || k === "hub") useAskHelp.getState().close();
+		else useAskHelp.getState().setPointing(null);
+	};
+	const ask = async (question) => {
+		const text = question.trim().slice(0, QUESTION_MAX);
+		if (!text || phase.kind === "asking") return;
+		if (phase.kind === "answer" && phase.answer.question.toLowerCase() === text.toLowerCase()) return;
+		const ctl = new AbortController();
+		abortRef.current = ctl;
+		const id = ++reqRef.current;
+		setShowPassage(false);
+		setPhase({
+			kind: "asking",
+			question: text
+		});
+		try {
+			const wait = takeAskSlot();
+			if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+			if (ctl.signal.aborted) return;
+			const answer = await askHelp(text, ctl.signal);
+			if (ctl.signal.aborted) return;
+			setPhase({
+				kind: "answer",
+				answer
+			});
+			if (isWhereQuestion(text) && answer.places.length) showPlace(answer.places[0]);
+		} catch (err) {
+			if (err?.name === "AbortError" || ctl.signal.aborted) return;
+			setPhase({
+				kind: "error",
+				text: err?.message || "Couldn't ask. Try again."
+			});
+		} finally {
+			if (abortRef.current === ctl) abortRef.current = null;
+			if (ctl.signal.aborted && reqRef.current === id) setPhase({ kind: "idle" });
+		}
+	};
+	const cancel = () => {
+		abortRef.current?.abort();
+		abortRef.current = null;
+		setPhase({ kind: "idle" });
+		inputRef.current?.focus();
+	};
+	const onKeyDown = (e) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			if (phase.kind === "asking") cancel();
+			else close();
+		}
+	};
+	const coachLayer = coach && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CoachTour, {
+		steps: [{
+			target: coach.ok ? coach.place.target : "",
+			title: coach.place.label,
+			body: coach.ok ? coach.place.caption : "It isn't on screen right now. " + coach.place.how
+		}],
+		onClose: endPointer,
+		skipLabel: "Close",
+		labelId: "ask-help-coach-title"
+	});
+	if (!open || pointing) return coachLayer || null;
+	const answer = phase.kind === "answer" ? phase.answer : null;
+	const lead = answer && !answer.model && answer.places.length && isWhereQuestion(answer.question) ? answer.places[0].how : "";
+	const box = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "ask-help",
+		ref: boxRef,
+		role: "dialog",
+		"aria-modal": "false",
+		"aria-labelledby": "ask-help-title",
+		onKeyDown,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: "ask-help-title",
+					children: "Ask how something works"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ask-x",
+					"aria-label": "Close",
+					title: "Close (Esc)",
+					onClick: close,
+					children: "✕"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+				className: "ask-form",
+				onSubmit: (e) => {
+					e.preventDefault();
+					ask(q);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					ref: inputRef,
+					id: "ask-help-input",
+					type: "text",
+					value: q,
+					maxLength: QUESTION_MAX,
+					placeholder: "How do I…? Where is…?",
+					"aria-label": "Your question about MindFlock",
+					autoComplete: "off",
+					onChange: (e) => setQ(e.target.value)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					className: "ask-go",
+					disabled: !q.trim() || phase.kind === "asking",
+					children: "Ask"
+				})]
+			}),
+			phase.kind === "idle" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-empty",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ask-starters",
+					role: "list",
+					"aria-label": "Try one of these",
+					children: STARTERS.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						role: "listitem",
+						className: "ask-starter",
+						onClick: () => {
+							setQ(s);
+							ask(s);
+						},
+						children: s
+					}, s))
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "ask-note",
+					children: "Answers come from MindFlock's own docs, worded by Claude Haiku through your Claude sign-in, the way voice help is. Without it you get the docs' plain words."
+				})]
+			}),
+			phase.kind === "asking" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-wait",
+				role: "status",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ask-dots",
+						"aria-hidden": "true",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {})
+						]
+					}),
+					"Looking in the docs…",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike ask-cancel",
+						onClick: cancel,
+						children: "Cancel"
+					})
+				]
+			}),
+			phase.kind === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ask-error",
+				role: "alert",
+				children: phase.text
+			}),
+			answer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-answer",
+				"aria-live": "polite",
+				children: [
+					lead ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "ask-lead",
+						children: lead
+					}) : answer.found ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerText, { text: answer.text }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "ask-unknown",
+						children: [
+							answer.text,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: () => openFeedback(),
+								children: "Send feedback…"
+							}),
+							" ",
+							"to ask for it."
+						]
+					}),
+					answer.places.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ask-places",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ask-places-label",
+							children: "Show me"
+						}), answer.places.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "ask-place",
+							title: p.caption,
+							onClick: () => void showPlace(p),
+							children: p.label
+						}, p.id))]
+					}),
+					answer.source && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ask-source",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								title: answer.source.doc + " › " + answer.source.path,
+								children: [
+									lead ? "Also in the docs: " : "From ",
+									answer.source.doc,
+									" › ",
+									answer.source.heading,
+									!answer.model && !lead && (answer.limited ? " (many questions at once: the docs' own words)" : " (the docs' own words)")
+								]
+							}),
+							answer.source.excerpt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								"aria-expanded": showPassage,
+								onClick: () => setShowPassage((v) => !v),
+								children: showPassage ? "Hide the section" : "Read the section"
+							}),
+							showPassage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("blockquote", {
+								className: "ask-passage",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerText, { text: answer.source.excerpt })
+							})
+						]
+					})
+				]
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [typeof document === "undefined" ? box : (0, import_react_dom.createPortal)(box, document.body), coachLayer] });
+}
+//#endregion
 //#region src/App.tsx
 var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
@@ -163609,6 +164644,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeedbackDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskHelp, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),
