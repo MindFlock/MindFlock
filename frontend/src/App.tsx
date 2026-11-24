@@ -61,6 +61,7 @@ import { SkyView } from "./components/flights/SkyView";
 import { RouteStartMenu } from "./components/flights/RouteStartMenu";
 import { HubPanel } from "./components/hub/HubPanel";
 import { FeedbackDialog } from "./components/feedback/FeedbackDialog";
+import { AskHelp } from "./components/helpAsk/AskHelp";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -362,6 +363,8 @@ export default function App() {
       <HubPanel />
       {/* Feedback about MindFlock itself (lib/feedback.ts). */}
       <FeedbackDialog />
+      {/* Ask how something works (lib/helpAsk): ? Help's question box. */}
+      <AskHelp />
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />
