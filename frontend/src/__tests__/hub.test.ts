@@ -2,7 +2,7 @@
  * hub"): the pure rules — the `file:` (and the first `hub:`) token a composer
  * answers, which items match, the words an item is described with, a pasted
  * screenshot's name, the selection's range and Pin split — and the wiring
- * pinned against the sources: the ⋯ menu's row and its calm count, the
+ * pinned against the sources: the sidebar row and its calm count, the
  * shortcut, the palette, the composers, the rail rows, the terminal paste and
  * the send step inside the drawer. */
 
@@ -15,6 +15,9 @@ import LIBHUB from "../lib/hub.ts?raw";
 import HUBDROP from "../components/hub/hubDrop.ts?raw";
 import ATTACH from "../components/hub/HubAttach.tsx?raw";
 import TOPBAR from "../components/TopBar.tsx?raw";
+import HUBBAR from "../components/sidebar/HubBar.tsx?raw";
+import BARS from "../components/sidebar/SidebarBars.tsx?raw";
+import TOOLBARS_CSS from "../components/sidebar/toolbars.css?raw";
 import KEYMAP from "../lib/keymap.ts?raw";
 import CLIP from "../lib/clipboard.ts?raw";
 import THREAD from "../components/grid/ThreadTab.tsx?raw";
@@ -204,19 +207,40 @@ describe("several at once", () => {
 });
 
 describe("wiring", () => {
-  it("Shared files is a row of the ⋯ menu at every width — no bar button — with a calm count on ⋯", () => {
+  it("Shared files is a sidebar row (Open / Add, a calm count) — nothing of it on the top bar", () => {
+    // Gone from the top bar: no button, no ⋯ row, no dot; ⋯ is only the fold.
     expect(TOPBAR).not.toContain('id="hub-btn"');
     expect(TOPBAR).not.toContain('data-fold="hub"');
     expect(TOPBAR).not.toContain('key: "hub"');
-    expect(TOPBAR).toContain("const moreAlways = !guest;");
-    expect(TOPBAR).toContain("const showMore = moreAlways || hasFolded;");
-    expect(TOPBAR).toContain("<span>Shared files</span>");
-    expect(TOPBAR).toContain('className="tb-new-dot"');
-    expect(TOPBAR).toContain('className="tb-count is-new"');
-    expect(TOPBAR).toContain("newCount(hubItems || [])");
-    expect(TOPBAR).toContain('"Shared files — files, pictures and text every session can use"');
-    // Its count is never the ⋯ "needs you" badge.
-    expect(TOPBAR).toContain("const foldedCount = folded.reduce((n, f) => n + f.count, 0);");
+    expect(TOPBAR).not.toContain("Shared files</span>");
+    expect(TOPBAR).not.toContain("moreAlways");
+    expect(TOPBAR).not.toContain("tb-new-dot");
+    expect(TOPBAR).not.toContain("useHub");
+    expect(TOPBAR).toContain("{hasFolded && (");
+    // The sidebar row: the bar key "hub" renders HubBar.
+    expect(BARS).toMatch(/case "hub":[\s\S]*?return <HubBar \/>;/);
+    expect(HUBBAR).toContain('id="hub-bar"');
+    expect(HUBBAR).toContain('"Shared files — files, pictures and text every session can use"');
+    // Open toggles the drawer (as Alt+H does); Add opens it into the picker.
+    expect(HUBBAR).toContain("useHubUi.getState().toggle();");
+    expect(HUBBAR).toContain("useHubUi.getState().openAdd();");
+    // A narrow window's sidebar drawer would cover the Shared files drawer.
+    expect(HUBBAR).toContain("if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();");
+    // The count: only what is new to you, zero while the drawer is open,
+    // drawn as the calm accent pill — never the red of "needs you".
+    expect(HUBBAR).toContain("const count = open ? 0 : newCount(items || []);");
+    expect(HUBBAR).toContain('className="hb-new"');
+    expect(HUBBAR).not.toContain("is-failing");
+    expect(TOOLBARS_CSS).toMatch(/#hub-bar \.hb-new \{[^}]*rgba\(var\(--accent-rgb\)/);
+    expect(TOOLBARS_CSS).not.toMatch(/#hub-bar[^{]*\{[^}]*var\(--red/);
+    // A guest link has none.
+    expect(HUBBAR).toContain("if (guest) return null;");
+  });
+  it("Add opens the drawer straight into its file picker", () => {
+    expect(LIBHUB).toContain("set({ open: true, sending: null, wantAdd: true });");
+    expect(PANEL).toContain("useHubUi.setState({ wantAdd: false });\n    fileInput.current?.click();");
+    // Closing forgets a pending Add.
+    expect(LIBHUB).toContain("{ open: false, sending: null, selected: [], wantAdd: false }");
   });
   it("Alt+H opens it, guarded in text fields; the palette finds it by its old name too", () => {
     expect(KEYMAP).toMatch(/key: "h",\s*alt: true,\s*id: "hub"/);
@@ -254,7 +278,7 @@ describe("wiring", () => {
 });
 
 describe("round 4: what the owner sees", () => {
-  it("the ⋯ count is only what an agent or your phone added since you looked", () => {
+  it("the row's count is only what an agent or your phone added since you looked", () => {
     const items = [
       item({ by: "you", added: 5000 }),
       item({ by: "session", added: 5000 }),

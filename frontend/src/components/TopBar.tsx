@@ -6,7 +6,8 @@
  * Only the daily loop is on the bar. Everything that waits on you is the
  * bell's (one badge); saved prompts are a tab of Customize (the sidebar
  * footer); Recently closed sits under the session list; Shared files is a
- * row of the ⋯ menu (at every width), whose calm "new" count rides on ⋯.
+ * row of the sidebar's tool list; Feedback is in the sidebar foot's ? Help
+ * menu. ⋯ appears only when a narrow window folds something.
  *
  * On macOS the whole thing mirrors: the window shows the native traffic lights
  * top-left (electron/main.js `titleBarStyle: 'hidden'`), so the bar leaves room
@@ -18,8 +19,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useUi } from "../state/store";
-import { useConfig, useDoctor, useTestPlans } from "../state/queries";
-import { newCount, useHub, useHubUi } from "../lib/hub";
+import { useDoctor, useTestPlans } from "../state/queries";
 import { needsYouBadge, useNeedsYou } from "../lib/needsYou";
 import { Bird } from "./flights/Bird";
 import { GridGlyph } from "./ViewGlyphs";
@@ -31,7 +31,6 @@ import { THEME_CHANGED } from "../lib/prefs";
 import { setTheme } from "../lib/theme";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 import { openSettings } from "../lib/openSettings";
-import { openFeedback } from "../lib/feedback";
 import { inShell } from "../lib/shell";
 import { keymapVersion, subscribeKeymap } from "../lib/keymap";
 import { usableShortcuts } from "./palette/ShortcutsSheet";
@@ -89,9 +88,6 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
   return { brand: false, shown };
 }
 
-/** The ⋯ menu's Shared files row's tooltip. */
-const HUB_TITLE = "Shared files — files, pictures and text every session can use";
-
 export function TopBar() {
   // Only the fields the bar reads: a bare useUi() re-rendered it on every
   // store write (a filter keystroke, a tab switch, a Thread "seen" mark).
@@ -126,14 +122,6 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // Shared files (lib/hub): a row of the ⋯ menu, never a standing button
-  // (the owner: not that important). ⋯ carries a calm count of what is NEW
-  // to you — items an agent or your phone added since you last opened it —
-  // in the accent, never as a "needs you" badge. A guest link has none.
-  const guest = !!useConfig().data?.guest;
-  const hubOpen = useHubUi((s) => s.open);
-  const hubItems = useHub(!guest).data?.items;
-  const hubCount = hubOpen ? 0 : newCount(hubItems || []);
   // The Sky toggle's badge: everything that needs you — THE one list
   // (lib/needsYou), the bell's badge and the Sky's Needs you strip count the
   // same rows; red while a route is halted.
@@ -244,10 +232,6 @@ export function TopBar() {
   const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
   const folded = foldable.slice(fit.shown);
   const isFolded = (key: string) => folded.some((f) => f.key === key);
-  // ⋯ is always on the bar when it holds Shared files (everyone but a
-  // guest): then it is part of the fixed width, never a reserve the fold
-  // adds; for a guest it appears only when something folds.
-  const moreAlways = !guest;
   const barRef = useRef<HTMLDivElement>(null);
   const startRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLElement>(null);
@@ -268,7 +252,7 @@ export function TopBar() {
     const menuGap = gap(menu);
     let fixed = 0;
     for (const el of Array.from(menu.children) as HTMLElement[]) {
-      const key = el.dataset.fold || (el.classList.contains("tb-more") && !moreAlways ? "more" : "");
+      const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
       const width = w(el);
       if (!key) fixed += width + menuGap;
       else if (width > 0) seen[key] = width;
@@ -289,9 +273,8 @@ export function TopBar() {
       fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
       brand: (seen.brand || 0) + barGap,
       items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
-      // Never measured yet: the palette icon's box, which ⋯ shares. A ⋯
-      // that is always there is already in `fixed`.
-      more: moreAlways ? 0 : (seen.more || w(document.getElementById("palette-btn"))) + menuGap,
+      // Never measured yet: the palette icon's box, which ⋯ shares.
+      more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap,
     });
     setFit((prev) => {
       if (prev.brand === next.brand && prev.shown === next.shown) return prev;
@@ -318,10 +301,9 @@ export function TopBar() {
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtn = useRef<HTMLButtonElement>(null);
   const hasFolded = folded.length > 0;
-  const showMore = moreAlways || hasFolded;
   useEffect(() => {
-    if (!showMore) setMoreOpen(false);
-  }, [showMore]);
+    if (!hasFolded) setMoreOpen(false);
+  }, [hasFolded]);
   useEffect(() => {
     if (!moreOpen) return;
     moreRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
@@ -502,25 +484,20 @@ export function TopBar() {
           >
             Settings
           </button>
-          {/* ⋯: Shared files' home at every width (a guest has none), and
-              what a narrow window folded (fitTopBar), carrying their counts so
-              a red badge is never lost with its word. The ids above stay on
-              the (hidden) bar buttons. What an agent or your phone added to
-              Shared files since you last looked rides on ⋯ as a small calm
-              "new" count — the accent, never the bell's red. */}
-          {showMore && (
+          {/* What a narrow window folded (fitTopBar): one ⋯ where the folded
+              items stood, carrying their counts, so a red badge is never lost
+              with its word. The ids above stay on the (hidden) bar buttons.
+              Nothing else lives here: at full width there is no ⋯ (Shared
+              files is a sidebar row, Feedback is in the sidebar's ? Help). */}
+          {hasFolded && (
             <div className="tb-more" ref={moreRef}>
               <button
                 id="more-btn"
                 ref={moreBtn}
                 className="tb-item"
                 type="button"
-                title={
-                  "More — " +
-                  [...(moreAlways ? ["Shared files"] : []), ...folded.map((f) => f.label)].join(", ") +
-                  (hubCount > 0 ? "\n" + hubCount + " new in Shared files (added by an agent or your phone)" : "")
-                }
-                aria-label={hubCount > 0 ? "More actions, " + hubCount + " new in Shared files" : "More actions"}
+                title={"More — " + folded.map((f) => f.label).join(", ")}
+                aria-label="More actions"
                 aria-haspopup="menu"
                 aria-expanded={moreOpen}
                 onClick={() => setMoreOpen((v) => !v)}
@@ -533,37 +510,9 @@ export function TopBar() {
                 {foldedCount > 0 && (
                   <span className={"tb-count" + (foldedFailing ? " is-failing" : "")}>{foldedCount}</span>
                 )}
-                {hubCount > 0 && (
-                  <span className="tb-new-dot" aria-hidden="true">
-                    {hubCount > 9 ? "9+" : hubCount}
-                  </span>
-                )}
               </button>
               {moreOpen && (
                 <div className="tb-more-menu" role="menu" aria-label="More actions">
-                  {moreAlways && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={"tb-more-item tb-more-files" + (hubOpen ? " is-on" : "")}
-                      data-fold-item="hub"
-                      title={HUB_TITLE + keys("hub")}
-                      onClick={() => {
-                        setMoreOpen(false);
-                        useHubUi.getState().toggle();
-                      }}
-                    >
-                      <span>Shared files</span>
-                      {hubCount > 0 ? (
-                        <span className="tb-count is-new" title={hubCount + " added by an agent or your phone since you last looked"}>
-                          {hubCount} new
-                        </span>
-                      ) : (
-                        keys("hub") && <span className="tb-more-key">{keys("hub").replace(/^ \((.*)\)$/, "$1")}</span>
-                      )}
-                    </button>
-                  )}
-                  {moreAlways && folded.length > 0 && <div className="tb-more-sep" role="separator" />}
                   {folded.map((f) => (
                     <button
                       key={f.key}
@@ -626,12 +575,6 @@ export function TopBar() {
         {version && (
           <button type="button" className="tb-version" title="What's new" onClick={openWhatsNew} style={{ pointerEvents: "auto", background: "none", border: 0, padding: 0, cursor: "pointer" }}>
             v{version}
-          </button>
-        )}
-        {/* Report a problem or an idea (lib/feedback.ts). Not for a guest. */}
-        {!guest && (
-          <button type="button" className="tb-feedback" title="Tell us about a problem or an idea" onClick={() => openFeedback()}>
-            Feedback
           </button>
         )}
       </span>

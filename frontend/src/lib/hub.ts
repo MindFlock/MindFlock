@@ -340,6 +340,11 @@ interface HubUi {
   open: boolean;
   setOpen(v: boolean): void;
   toggle(): void;
+  /** Set by openAdd() and cleared by the drawer as it opens its file picker
+   * ("Add files…") — the sidebar row's Add. */
+  wantAdd: boolean;
+  /** Open the drawer on its list and straight into Add files… */
+  openAdd(): void;
   /** The items "Send to session…" is open for: the drawer shows its send
    * step (with Back) instead of the list — one surface, never a dialog the
    * drawer could cover. */
@@ -362,9 +367,14 @@ export const useHubUi = create<HubUi>((set, get) => ({
   // the list, nothing ticked, every time.
   setOpen: (v) => {
     if (v) markHubSeen();
-    set(v ? { open: true } : { open: false, sending: null, selected: [] });
+    set(v ? { open: true } : { open: false, sending: null, selected: [], wantAdd: false });
   },
   toggle: () => get().setOpen(!get().open),
+  wantAdd: false,
+  openAdd: () => {
+    if (!get().open) markHubSeen();
+    set({ open: true, sending: null, wantAdd: true });
+  },
   sending: null,
   // Opening Send to session… retires a "Put in X's prompt" notice: two
   // live ways to send the same item is how it gets sent twice. It opens the
@@ -415,7 +425,7 @@ export function flashTarget(title: string): void {
 }
 
 // --------------------------------------------------------------------------
-// What's new since you last looked (the ⋯ menu's dot and its row's count)
+// What's new since you last looked (the sidebar row's count)
 // --------------------------------------------------------------------------
 const SEEN_KEY = "mf_hub_seen";
 

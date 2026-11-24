@@ -177,14 +177,14 @@ export function terminalFocused(): boolean {
  *      attribute — which also catches vanilla partials and addon dialogs the
  *      store never hears about.
  *   3. A short list of popovers that hold the keyboard without being dialogs
- *      (the bell, the ⏩ picker, the Prompts menu, the break screen) — they are
+ *      (the bell, the ⏩ picker, the Prompts menu, ? Help, the break screen) — they are
  *      not modal in markup, but a Delete pressed at one of their buttons is
  *      about THEM, never about the focused session.
  *
  * Visible = present, no `hidden` attribute, no `.hidden` class on it or an
  * ancestor, and not `display:none` where computed style is available. */
 export const OVERLAY_SELECTOR = '[role="dialog"], .modal, .dialog, .palette, [data-modal]';
-const POPOVER_IDS = ["break-screen", "fast-track-menu", "prompts-menu", "notif-pop"];
+const POPOVER_IDS = ["break-screen", "fast-track-menu", "prompts-menu", "notif-pop", "help-menu"];
 
 function elementVisible(el: Element): boolean {
   const h = el as HTMLElement;

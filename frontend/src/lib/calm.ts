@@ -103,7 +103,7 @@ export function writeCalmHint(calm: boolean): void {
  * them back): the usage strip and its Memory twin, the Assistant, and every extension's bar
  * (Database, Usage optimizer…). Tickets stays — it draws nothing until a
  * tracker is connected, and connecting one is a first-hour thing. */
-export const CALM_HIDDEN_BARS = ["usage", "memory", "assistant"];
+export const CALM_HIDDEN_BARS = ["usage", "memory", "assistant", "hub"];
 
 /** Whether a bar key is one the calm default hides. */
 export function calmHidesBar(key: string): boolean {

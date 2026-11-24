@@ -794,14 +794,24 @@ agent only. If the file can't be read the editor says *Couldn't load the
 instructions.* with a **Retry**, and Save stays off until it loads, so an empty
 box never overwrites the real file; a failed restart is reported, and a click
 outside never drops unsaved edits. The to-do list that used to sit here is the **To-do** bar now —
-see [To-do](#to-do)), the **Prompts** bar (your saved prompts, one click from any
+see [To-do](#to-do)), the **Shared files** row (**Open** · **Add**, right
+under To-do — or under the Assistant when To-do is off; see
+[Shared files](#shared-files)), the **Prompts** bar (your saved prompts, one click from any
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, and one bar per extension. Under the
 list, a **Recently closed** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
-count, **⚙ Customize** (see [Customize](#customize)) and **⌨ Shortcuts**. The command
+count, **⚙ Customize** (see [Customize](#customize)) and **? Help** — a menu,
+opening upward, of **Send feedback…** (see [Feedback](#feedback)), **Keyboard
+shortcuts** (the shortcut sheet; `?` still opens it) and **What's new** (this
+release's notes; the version in the top bar opens them too). There is no Docs
+row: the app links to no documentation site. The menu takes ↑/↓/Home/End, Esc
+(or Tab) closes it and gives the keyboard back to **? Help**, and it is drawn
+over the page (`#help-menu`, body-mounted), so the sidebar never clips it. A
+report an agent drafted for you is a small accent dot on **? Help** and
+"1 draft" on **Send feedback…** until you send or discard it. The command
 palette, Intake, Verify and Settings live in the top bar, not down here, and
 the desktop-notification on/off toggle lives in Settings → Notifications.
 Disk management is not a screen of its own any more: it is the same page as
@@ -811,7 +821,7 @@ Disk management is not a screen of its own any more: it is the same page as
 first session under a week old, read from the server's setup record (the
 `repo` step's date), so every device agrees — with fewer than three sessions
 sees only what the first hour needs: the sessions, **+ New** and **Setup**.
-The usage strip, the **Memory** row, the **Assistant** bar and every extension's bar (Database,
+The usage strip, the **Memory** row, the **Assistant** bar, the **Shared files** row and every extension's bar (Database,
 Usage optimizer…) join the *default* hidden set; the **View** row's pane
 counts (never its Grid · Sky toggle), the
 filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
@@ -999,7 +1009,7 @@ session's name highlights **Focus: <name>**. **Join with code …** is offered
 only for a real code shape (a dashed `XXXX-XXXX` device code or an
 `mfp1:`/`mfp2:` invite) — an eight-letter word like *worktree* is not a code.
 
-**Shortcut sheet** (`?`, or **⌨ Shortcuts**) — in a browser tab, each row
+**Shortcut sheet** (`?`, or **? Help → Keyboard shortcuts**) — in a browser tab, each row
 leads with the combo that works there (Alt+N before Ctrl+N, Delete before
 Ctrl+W), keys the browser keeps for itself (Ctrl+N/W/T, Ctrl+Tab, Ctrl+PgUp/Dn,
 Ctrl+1…9) are drawn faded, and rows with nothing usable in a tab sort last,
@@ -3112,8 +3122,8 @@ every 15 s while a window is up; nothing is persisted — see
 
 ## Feedback
 
-**Feedback**, beside the version in the top bar (and "Send feedback or report
-a problem…" in the palette), opens one box for telling the MindFlock
+**? Help → Send feedback…**, at the foot of the sidebar (and "Send feedback or
+report a problem…" in the palette), opens one box for telling the MindFlock
 developers about a problem or an idea: pick what kind, write a line or two,
 **Send**. The box says where it goes before you send — a public GitHub issue
 on `MindFlock/MindFlock`, filed as your GitHub account — and shows the one
@@ -3124,8 +3134,13 @@ opens the same report pre-filled in the browser.
 An agent can write the report for you: ask it to report the problem and it
 drafts one (the MCP's `report_issue`). A toast offers **Review**; the box
 opens on the draft, saying which session wrote it and how many paths or keys
-were replaced. Nothing is sent until you press Send. **Discard draft** throws
-it away. Not shown to a guest.
+were replaced. Until you send or discard it, a small accent dot sits on
+**? Help** and **Send feedback…** says "1 draft", so a draft whose toast went
+by is not lost (read on load, on each `feedback.draft` event and when the box
+closes — never polled). Nothing is sent until you press Send. **Discard
+draft** throws it away. Not shown to a guest. (It used to be a **Feedback**
+link beside the version in the top bar; the owner moved it into **? Help**,
+where Linear, Notion and Figma keep theirs.)
 
 ## Shared files
 
@@ -3136,14 +3151,23 @@ name was "the Hub": the code, the API (`/api/hub`), the MCP tool (`hub`), the
 `mindflock hub` command, the `hub.*` settings, `hub.json` and the `hub/`
 folder a copy lands in keep that name, so nothing stored or scripted breaks.)
 
-* **Opening it**: the top bar's **⋯** menu → **Shared files** (at every
-  window width — it has no button of its own on the bar), Alt+H, or the
-  palette's "Shared files…" ("hub" still finds it). It opens a drawer on the
-  right. When an agent or your phone has added something since you last
-  opened it, **⋯** carries a small calm count in the accent (never the
-  bell's red "needs you" badge) and the menu row says "3 new"; what you
-  added yourself is never "new". The drawer is not a modal: the sessions
-  stay usable beside it.
+* **Opening it**: the sidebar's **Shared files** row — **Open** (the drawer,
+  as Alt+H does; pressed while it is open) or **Add** (the drawer, straight
+  into its **Add files…** picker) — Alt+H, or the palette's "Shared files…"
+  ("hub" still finds it). It opens a drawer on the right. When an agent or
+  your phone has added something since you last opened it, the row carries a
+  small calm count in the accent (the extension bars' pill, never the bell's
+  red "needs you" badge); what you added yourself is never "new". The row is
+  a customizable bar (Customize → Sidebar, key `hub`): shown by default,
+  right under the **To-do** bar (or the Assistant when To-do is off) for an
+  order that never placed it; hidden in the calm first hour ([Layout](#layout)) like
+  the Assistant. With the sidebar hidden, Alt+H, the palette, the `file:`
+  picker and the 📎 in a message box still reach it; in a narrow window the
+  row's Open and Add close the sidebar drawer first, so it never covers the
+  Shared files drawer. (In 0.14.28 it was the first row of the top bar's
+  **⋯**, which was always on the bar to hold it; ⋯ is back to holding only
+  what a narrow bar folds.) The drawer is not a modal: the sessions stay
+  usable beside it.
 * **Adding.** Drop files anywhere on the drawer, **Add files…**, **New
   snippet** (a text box; Ctrl/⌘+Enter adds it), or **paste** (Ctrl/⌘+V) a
   screenshot or text while the drawer has focus — a pasted screenshot is
@@ -3251,7 +3275,7 @@ folder a copy lands in keep that name, so nothing stored or scripted breaks.)
   kept on this device only (whether it was, and where it came from, went
   with the list) — the notice says how many; ⋯ → **Show on my other
   devices** shares one again.
-* A guest link has no Shared files (no ⋯ row, no drawer).
+* A guest link has no Shared files (no sidebar row, no drawer).
 * **Your other devices' items** (on demand, never a sync — docs/devices.md
   "Shared files on your other devices"). Each device keeps its own store;
   the drawer ALSO lists what your other devices offer right now, in the
@@ -4381,7 +4405,7 @@ go** starts the Welcome [tour](#tours) over the checklist. It counts as seen
   top-right, like every dialog's). The modal never opens
   by itself — not on a failing doctor probe, not on a first load. In a
   phone-narrow window the sidebar is a drawer over the page; any dialog that
-  opens (the chip's Setup, Shortcuts, …) closes the drawer first
+  opens (the chip's Setup, ? Help's rows, …) closes the drawer first
   (`Modal`'s `mf:modal-open` event → `closeDrawerForModal`), so it is never
   drawn under it. The
   doctor chip stays down while the grid card or this chip is showing,
@@ -4552,8 +4576,8 @@ theirs — and closing a first launch's welcome marks it seen too, so a
 newcomer who closes it before the slow first doctor probe tells What's new
 the version is not read as an upgrader), never before onboarding is done or over the welcome card, a tour or a
 dialog, and never lists an entry above the running version. Reopen it from the
-palette (**What's new**), **Settings → General → Help**, or a click on the
-version beside the wordmark. Details: `docs/vision/whats-new.md`.
+palette (**What's new**), the sidebar's **? Help → What's new**, **Settings →
+General → Help**, or a click on the version beside the wordmark. Details: `docs/vision/whats-new.md`.
 
 ### Connect GitHub
 
@@ -6136,14 +6160,16 @@ with an **Intake → Tickets** link (Tickets); *Appears once a repository is
 added* with **Intake → GitHub PRs** / **Intake → GitHub issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
-always there); *Chat, and its editable agent file* (Assistant);
+always there); *Chat, and its editable agent file* (Assistant); *Files,
+pictures and text every session can use — with a count of what an agent or
+your phone added* (Shared files);
 *Your saved prompts — pick one to paste it into the session you are in* with **Manage
 prompts** (Prompts); *Things you need to do by hand — manual test steps, anything
 waiting on you* with **Settings → Extensions** (To-do — an extension bar MindFlock
 ships carries its own line, `EXT_NOTES` keyed `ext:<id>`); *From an extension* for
 any other extension's bar. *Session list*
 → **Filter box**. Reset brings back the starter bars (Usage, Memory, Tickets,
-Assistant), the default order and the filter box.
+Assistant, Shared files), the default order and the filter box.
 
 **Pane header** — *Choose the tabs and buttons along the top of every session
 window. The rest stay in its ⋯ menu.* On top, a **live preview** (sticky, so

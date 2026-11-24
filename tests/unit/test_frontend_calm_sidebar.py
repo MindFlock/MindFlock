@@ -148,9 +148,11 @@ def test_bar_labels_are_the_intake_tab_names():
     assert '{ key: "issue-handling", label: "GitHub issues" }' in defs
     for old in ("Ticket Ingestion", "PR Review", "Issue Handling"):
         assert old not in defs, old
-    # The owner's out-of-the-box set is unchanged.
+    # The owner's out-of-the-box set, plus Shared files (a sidebar row since
+    # it left the top bar's ⋯).
     assert (
-        'DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant"]' in defs
+        'DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant", "hub"]'
+        in defs
     )
 
 
@@ -285,7 +287,9 @@ def test_the_view_buttons_and_footer_icons_are_back():
     assert "const perch = needsYouBadge(useNeedsYou());" in side
     assert "vm-sky" not in side
     assert 'id="view-mode-select"' not in side
-    assert "⌨ Shortcuts" in side
+    # The shortcut sheet is a row of the foot's ? Help menu (HelpMenu.tsx).
+    assert "<HelpMenu />" in side
+    assert "⌨ Shortcuts" not in side
     css = _src("components/sidebar/SidebarRow.css")
     assert "#view-modes .vm.active {" in css
     assert "#view-modes select" not in css
@@ -466,6 +470,7 @@ def test_the_rename_kept_every_persisted_bar_key():
         "pr-review",
         "issue-handling",
         "assistant",
+        "hub",  # Shared files, out of the top bar's ⋯ (2026-11-23)
         "prompts",
     ]
 

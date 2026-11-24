@@ -1,11 +1,15 @@
 /** Feedback (backend core/feedback.py, docs/web-ui.md "Feedback"): report a
  * problem or an idea about MindFlock itself. One box, two ways in — the
- * person opens it (top bar, palette) and types, or an agent they are talking
- * to drafts a report (the MCP's `report_issue`) and the box opens on that
- * draft. Nothing is sent until Send; sent, it is a public GitHub issue. */
+ * person opens it (the sidebar's ? Help → Send feedback…, the palette) and
+ * types, or an agent they are talking to drafts a report (the MCP's
+ * `report_issue`) and the box opens on that draft. Nothing is sent until
+ * Send; sent, it is a public GitHub issue. */
 
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { api } from "../api/client";
+import { queryClient } from "../state/queries";
 import { toast } from "./toast";
 
 export type FeedbackKind = "bug" | "idea" | "feedback";
@@ -68,6 +72,35 @@ export function openFeedback(draftId?: string | null): void {
 
 export function loadFeedback(): Promise<FeedbackInfo> {
   return api<FeedbackInfo>("/api/feedback");
+}
+
+const FEEDBACK_KEY = ["feedback"];
+
+/** How many reports an agent drafted that wait for the person to read — the
+ * calm mark on the sidebar's ? Help and its Send feedback… row, so a draft
+ * whose toast went by is not lost. Read once, then again when an agent
+ * drafts one (`feedback.draft`) and whenever the box closes (sent or
+ * discarded); never polled. A guest (or a failed read) has none. */
+export function useFeedbackDrafts(enabled = true): number {
+  const open = useFeedbackUi((s) => s.open);
+  useEffect(() => {
+    if (!enabled) return;
+    const ev = typeof window !== "undefined" ? window.mindflock?.events : undefined;
+    if (!ev) return;
+    return ev.subscribe("feedback.draft", () => void queryClient.invalidateQueries({ queryKey: FEEDBACK_KEY }));
+  }, [enabled]);
+  useEffect(() => {
+    if (enabled && !open) void queryClient.invalidateQueries({ queryKey: FEEDBACK_KEY });
+  }, [enabled, open]);
+  const q = useQuery({
+    queryKey: FEEDBACK_KEY,
+    queryFn: loadFeedback,
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  return enabled && !q.isError ? q.data?.drafts?.length || 0 : 0;
 }
 
 export function discardDraft(id: string): Promise<unknown> {

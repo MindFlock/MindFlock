@@ -27063,17 +27063,25 @@ var SIDEBAR_BARS = [
 		label: "Assistant"
 	},
 	{
+		key: "hub",
+		label: "Shared files"
+	},
+	{
 		key: "prompts",
 		label: "Prompts"
 	}
 ];
 var LATE_BARS = /* @__PURE__ */ new Set(["prompts"]);
-var FOLLOWS = { memory: "usage" };
+var FOLLOWS = {
+	memory: ["usage"],
+	hub: ["ext:todo", "assistant"]
+};
 var DEFAULT_VISIBLE_BARS = [
 	"usage",
 	"memory",
 	"ingestion",
-	"assistant"
+	"assistant",
+	"hub"
 ];
 var calmExtra = [];
 function setCalmBarDefaults(keys) {
@@ -27102,7 +27110,6 @@ function orderedSections(order, extraKeys = []) {
 	const lateMissing = [];
 	for (const key of DEFAULT_SECTION_ORDER) if (!seen.has(key)) {
 		if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
-		else if (order.length && FOLLOWS[key] && out.includes(FOLLOWS[key])) out.splice(out.indexOf(FOLLOWS[key]) + 1, 0, key);
 		else out.push(key);
 		seen.add(key);
 	}
@@ -27113,6 +27120,14 @@ function orderedSections(order, extraKeys = []) {
 		return true;
 	});
 	if (missingExtras.length) out.splice(out.indexOf(SESSIONS_KEY), 0, ...missingExtras);
+	const said = new Set(order);
+	for (const [key, partners] of Object.entries(FOLLOWS)) {
+		if (said.has(key) || !out.includes(key)) continue;
+		const partner = partners.find((p) => p !== key && out.includes(p));
+		if (!partner) continue;
+		out.splice(out.indexOf(key), 1);
+		out.splice(out.indexOf(partner) + 1, 0, key);
+	}
 	return out;
 }
 function orderedBars(order, extraDefs = []) {
@@ -30816,10 +30831,20 @@ var useHubUi = create((set, get) => ({
 		set(v ? { open: true } : {
 			open: false,
 			sending: null,
-			selected: []
+			selected: [],
+			wantAdd: false
 		});
 	},
 	toggle: () => get().setOpen(!get().open),
+	wantAdd: false,
+	openAdd: () => {
+		if (!get().open) markHubSeen();
+		set({
+			open: true,
+			sending: null,
+			wantAdd: true
+		});
+	},
 	sending: null,
 	openSend: (items) => {
 		const list = items ? Array.isArray(items) ? items : [items] : [];
@@ -39902,7 +39927,8 @@ var POPOVER_IDS = [
 	"break-screen",
 	"fast-track-menu",
 	"prompts-menu",
-	"notif-pop"
+	"notif-pop",
+	"help-menu"
 ];
 function elementVisible(el) {
 	const h = el;
@@ -52942,6 +52968,28 @@ function openFeedback(draftId) {
 function loadFeedback() {
 	return api("/api/feedback");
 }
+var FEEDBACK_KEY = ["feedback"];
+function useFeedbackDrafts(enabled = true) {
+	const open = useFeedbackUi((s) => s.open);
+	(0, import_react.useEffect)(() => {
+		if (!enabled) return;
+		const ev = typeof window !== "undefined" ? window.mindflock?.events : void 0;
+		if (!ev) return;
+		return ev.subscribe("feedback.draft", () => void queryClient.invalidateQueries({ queryKey: FEEDBACK_KEY }));
+	}, [enabled]);
+	(0, import_react.useEffect)(() => {
+		if (enabled && !open) queryClient.invalidateQueries({ queryKey: FEEDBACK_KEY });
+	}, [enabled, open]);
+	const q = useQuery({
+		queryKey: FEEDBACK_KEY,
+		queryFn: loadFeedback,
+		enabled,
+		staleTime: Infinity,
+		retry: false,
+		refetchOnWindowFocus: false
+	});
+	return enabled && !q.isError ? q.data?.drafts?.length || 0 : 0;
+}
 function discardDraft(id) {
 	return api("/api/feedback/drafts/" + encodeURIComponent(id), { method: "DELETE" });
 }
@@ -61727,7 +61775,8 @@ function writeCalmHint(calm) {
 var CALM_HIDDEN_BARS = [
 	"usage",
 	"memory",
-	"assistant"
+	"assistant",
+	"hub"
 ];
 function calmHidesBar(key) {
 	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
@@ -65125,7 +65174,6 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 		shown
 	};
 }
-var HUB_TITLE = "Shared files — files, pictures and text every session can use";
 function TopBar() {
 	const ui = useUi(useShallow((s) => ({
 		narrow: s.narrow,
@@ -65139,10 +65187,6 @@ function TopBar() {
 	useTestPlans();
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
-	const guest = !!useConfig().data?.guest;
-	const hubOpen = useHubUi((s) => s.open);
-	const hubItems = useHub(!guest).data?.items;
-	const hubCount = hubOpen ? 0 : newCount(hubItems || []);
 	const perch = needsYouBadge(useNeedsYou());
 	const quiet = topBarQuiet({
 		calm: useCalm(),
@@ -65214,7 +65258,6 @@ function TopBar() {
 	});
 	const folded = foldable.slice(fit.shown);
 	const isFolded = (key) => folded.some((f) => f.key === key);
-	const moreAlways = !guest;
 	const barRef = (0, import_react.useRef)(null);
 	const startRef = (0, import_react.useRef)(null);
 	const menuRef = (0, import_react.useRef)(null);
@@ -65232,7 +65275,7 @@ function TopBar() {
 		const menuGap = gap(menu);
 		let fixed = 0;
 		for (const el of Array.from(menu.children)) {
-			const key = el.dataset.fold || (el.classList.contains("tb-more") && !moreAlways ? "more" : "");
+			const key = el.dataset.fold || (el.classList.contains("tb-more") ? "more" : "");
 			const width = w(el);
 			if (!key) fixed += width + menuGap;
 			else if (width > 0) seen[key] = width;
@@ -65248,7 +65291,7 @@ function TopBar() {
 			fixed: w(start.firstElementChild) + gap(start) + fixed - menuGap + barGap + (end ? barGap + w(end) : 0),
 			brand: (seen.brand || 0) + barGap,
 			items: foldable.map((f) => (seen[f.key] || 0) + menuGap),
-			more: moreAlways ? 0 : (seen.more || w(document.getElementById("palette-btn"))) + menuGap
+			more: (seen.more || w(document.getElementById("palette-btn"))) + menuGap
 		});
 		setFit((prev) => {
 			if (prev.brand === next.brand && prev.shown === next.shown) return prev;
@@ -65269,10 +65312,9 @@ function TopBar() {
 	const moreRef = (0, import_react.useRef)(null);
 	const moreBtn = (0, import_react.useRef)(null);
 	const hasFolded = folded.length > 0;
-	const showMore = moreAlways || hasFolded;
 	(0, import_react.useEffect)(() => {
-		if (!showMore) setMoreOpen(false);
-	}, [showMore]);
+		if (!hasFolded) setMoreOpen(false);
+	}, [hasFolded]);
 	(0, import_react.useEffect)(() => {
 		if (!moreOpen) return;
 		moreRef.current?.querySelector("[role=\"menuitem\"]")?.focus();
@@ -65449,7 +65491,7 @@ function TopBar() {
 							onClick: () => openSettings(),
 							children: "Settings"
 						}),
-						showMore && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						hasFolded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "tb-more",
 							ref: moreRef,
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -65457,90 +65499,57 @@ function TopBar() {
 								ref: moreBtn,
 								className: "tb-item",
 								type: "button",
-								title: "More — " + [...moreAlways ? ["Shared files"] : [], ...folded.map((f) => f.label)].join(", ") + (hubCount > 0 ? "\n" + hubCount + " new in Shared files (added by an agent or your phone)" : ""),
-								"aria-label": hubCount > 0 ? "More actions, " + hubCount + " new in Shared files" : "More actions",
+								title: "More — " + folded.map((f) => f.label).join(", "),
+								"aria-label": "More actions",
 								"aria-haspopup": "menu",
 								"aria-expanded": moreOpen,
 								onClick: () => setMoreOpen((v) => !v),
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-										viewBox: "0 0 24 24",
-										width: "15",
-										height: "15",
-										"aria-hidden": "true",
-										fill: "currentColor",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-												cx: "5",
-												cy: "12",
-												r: "1.9"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-												cx: "12",
-												cy: "12",
-												r: "1.9"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-												cx: "19",
-												cy: "12",
-												r: "1.9"
-											})
-										]
-									}),
-									foldedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "tb-count" + (foldedFailing ? " is-failing" : ""),
-										children: foldedCount
-									}),
-									hubCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "tb-new-dot",
-										"aria-hidden": "true",
-										children: hubCount > 9 ? "9+" : hubCount
-									})
-								]
-							}), moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									viewBox: "0 0 24 24",
+									width: "15",
+									height: "15",
+									"aria-hidden": "true",
+									fill: "currentColor",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "5",
+											cy: "12",
+											r: "1.9"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "12",
+											cy: "12",
+											r: "1.9"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+											cx: "19",
+											cy: "12",
+											r: "1.9"
+										})
+									]
+								}), foldedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "tb-count" + (foldedFailing ? " is-failing" : ""),
+									children: foldedCount
+								})]
+							}), moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "tb-more-menu",
 								role: "menu",
 								"aria-label": "More actions",
-								children: [
-									moreAlways && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										type: "button",
-										role: "menuitem",
-										className: "tb-more-item tb-more-files" + (hubOpen ? " is-on" : ""),
-										"data-fold-item": "hub",
-										title: HUB_TITLE + keys("hub"),
-										onClick: () => {
-											setMoreOpen(false);
-											useHubUi.getState().toggle();
-										},
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Shared files" }), hubCount > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "tb-count is-new",
-											title: hubCount + " added by an agent or your phone since you last looked",
-											children: [hubCount, " new"]
-										}) : keys("hub") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "tb-more-key",
-											children: keys("hub").replace(/^ \((.*)\)$/, "$1")
-										})]
-									}),
-									moreAlways && folded.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "tb-more-sep",
-										role: "separator"
-									}),
-									folded.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										type: "button",
-										role: "menuitem",
-										className: "tb-more-item",
-										"data-fold-item": f.key,
-										title: f.title,
-										onClick: () => {
-											setMoreOpen(false);
-											f.open();
-										},
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label }), f.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "tb-count" + (f.failing ? " is-failing" : ""),
-											children: f.count
-										})]
-									}, f.key))
-								]
+								children: folded.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									role: "menuitem",
+									className: "tb-more-item",
+									"data-fold-item": f.key,
+									title: f.title,
+									onClick: () => {
+										setMoreOpen(false);
+										f.open();
+									},
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label }), f.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-count" + (f.failing ? " is-failing" : ""),
+										children: f.count
+									})]
+								}, f.key))
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -65594,13 +65603,6 @@ function TopBar() {
 							cursor: "pointer"
 						},
 						children: ["v", version]
-					}),
-					!guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "tb-feedback",
-						title: "Tell us about a problem or an idea",
-						onClick: () => openFeedback(),
-						children: "Feedback"
 					})
 				]
 			}),
@@ -73628,6 +73630,65 @@ function GitIssueBar() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/HubBar.tsx
+var HUB_TITLE = "Shared files — files, pictures and text every session can use";
+function leaveNarrowDrawer() {
+	const ui = useUi.getState();
+	if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
+}
+function HubBar() {
+	const guest = !!useConfig().data?.guest;
+	const open = useHubUi((s) => s.open);
+	const items = useHub(!guest).data?.items;
+	const [, setKeysVer] = (0, import_react.useState)(keymapVersion());
+	(0, import_react.useEffect)(() => subscribeKeymap(() => setKeysVer(keymapVersion())), []);
+	if (guest) return null;
+	const count = open ? 0 : newCount(items || []);
+	const k = usableShortcuts("hub", !inShell());
+	const key = k.length ? " (" + k.join(" / ") + ")" : "";
+	const countLine = count + " added by an agent or your phone since you last looked";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "hub-bar",
+		title: HUB_TITLE,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "hb-label",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "hb-label-text",
+				children: "Shared files"
+			}), count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "hb-new",
+				title: countLine,
+				"aria-label": countLine,
+				children: count > 99 ? "99+" : count
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "hb-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "hub-open-btn",
+				type: "button",
+				className: "as-toggle" + (open ? " active" : ""),
+				"aria-pressed": open,
+				title: (open ? "Close Shared files" : "Open Shared files") + key,
+				onClick: () => {
+					if (!open) leaveNarrowDrawer();
+					useHubUi.getState().toggle();
+				},
+				children: "Open"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "hub-add-btn",
+				type: "button",
+				className: "as-toggle",
+				title: "Add files to Shared files — or drop or paste them in the open drawer",
+				onClick: () => {
+					leaveNarrowDrawer();
+					useHubUi.getState().openAdd();
+				},
+				children: "Add"
+			})]
+		})]
+	});
+}
+//#endregion
 //#region src/components/sidebar/PrReviewBar.tsx
 function PrReviewBar() {
 	const openDialogFor = useUi((s) => s.openDialogFor);
@@ -74019,6 +74080,7 @@ function barContent(key, cbs) {
 				})]
 			})]
 		});
+		case "hub": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HubBar, {});
 		case "prompts": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsBar, {});
 		default: return null;
 	}
@@ -74078,6 +74140,167 @@ function FooterCustomize() {
 			children: "⚙ Customize"
 		})
 	});
+}
+//#endregion
+//#region src/components/sidebar/HelpMenu.tsx
+function HelpMenu() {
+	const guest = !!useConfig().data?.guest;
+	const drafts = useFeedbackDrafts(!guest);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const btnRef = (0, import_react.useRef)(null);
+	const [, setKeysVer] = (0, import_react.useState)(keymapVersion());
+	(0, import_react.useEffect)(() => subscribeKeymap(() => setKeysVer(keymapVersion())), []);
+	const sheetKeys = usableShortcuts("sheet", !inShell());
+	const draftLine = drafts === 1 ? "An agent drafted a report for you to read" : drafts + " reports drafted by an agent wait for you to read";
+	const rows = [
+		!guest && {
+			key: "feedback",
+			label: "Send feedback…",
+			title: drafts > 0 ? draftLine : "Tell us about a problem or an idea",
+			aside: drafts > 0 ? {
+				text: drafts === 1 ? "1 draft" : drafts + " drafts",
+				draft: true,
+				title: draftLine
+			} : void 0,
+			run: () => openFeedback()
+		},
+		{
+			key: "shortcuts",
+			label: "Keyboard shortcuts",
+			title: "Every keyboard shortcut" + (sheetKeys.length ? " (" + sheetKeys.join(" / ") + ")" : ""),
+			aside: sheetKeys.length ? { text: sheetKeys[0] } : void 0,
+			run: () => useUi.getState().openDialogFor("shortcuts")
+		},
+		{
+			key: "whats-new",
+			label: "What's new",
+			title: "This release's new features",
+			run: () => openWhatsNew()
+		}
+	].filter((r) => !!r);
+	const close = (refocus) => {
+		setOpen(false);
+		if (refocus) btnRef.current?.focus();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		ref: btnRef,
+		id: "help-btn",
+		type: "button",
+		className: "foot-link" + (drafts > 0 ? " has-draft" : ""),
+		title: "Help — send feedback, keyboard shortcuts, what's new" + (drafts > 0 ? "\n" + draftLine : ""),
+		"aria-label": drafts > 0 ? "Help, " + draftLine.toLowerCase() : "Help",
+		"aria-haspopup": "menu",
+		"aria-expanded": open,
+		onClick: () => setOpen((v) => !v),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "help-q",
+				"aria-hidden": "true",
+				children: "?"
+			}),
+			" ",
+			"Help",
+			drafts > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "help-draft-dot",
+				"aria-hidden": "true"
+			})
+		]
+	}), open && btnRef.current && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HelpMenuList, {
+		anchor: btnRef.current,
+		rows,
+		onClose: close
+	})] });
+}
+function HelpMenuList({ anchor, rows, onClose }) {
+	const menuRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	(0, import_react.useLayoutEffect)(() => {
+		const m = menuRef.current;
+		if (!m) return;
+		const r = anchor.getBoundingClientRect();
+		const h = m.offsetHeight;
+		const above = r.top - 8;
+		const below = window.innerHeight - r.bottom - 8;
+		const top = h + 6 <= above || above >= below ? Math.max(8, r.top - 6 - h) : r.bottom + 6;
+		m.style.top = Math.round(top) + "px";
+		m.style.maxHeight = Math.max(120, window.innerHeight - top - 8) + "px";
+		const left = Math.min(Math.max(8, r.right - m.offsetWidth), window.innerWidth - m.offsetWidth - 8);
+		m.style.left = Math.round(Math.max(8, left)) + "px";
+	}, [anchor]);
+	(0, import_react.useEffect)(() => {
+		menuRef.current?.querySelector("[role=\"menuitem\"]")?.focus({ preventScroll: true });
+		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
+		const onDown = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onResize = () => onCloseRef.current(false);
+		const onKey = (e) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				e.preventDefault();
+				onCloseRef.current(true);
+			}
+		};
+		document.addEventListener("mousedown", onDown, true);
+		document.addEventListener("keydown", onKey, true);
+		window.addEventListener("resize", onResize);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			document.removeEventListener("keydown", onKey, true);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [anchor]);
+	const onKeyDown = (e) => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		const items = Array.from(menuRef.current?.querySelectorAll("[role=\"menuitem\"]") || []);
+		if (!items.length) return;
+		const at = items.indexOf(document.activeElement);
+		let next = -1;
+		if (e.key === "ArrowDown") next = (at + 1) % items.length;
+		else if (e.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+		else if (e.key === "Home") next = 0;
+		else if (e.key === "End") next = items.length - 1;
+		else if (e.key === "Tab") {
+			e.preventDefault();
+			onCloseRef.current(true);
+			return;
+		} else return;
+		e.preventDefault();
+		e.stopPropagation();
+		items[next].focus();
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "help-menu",
+		role: "menu",
+		"aria-label": "Help",
+		ref: menuRef,
+		style: {
+			top: 0,
+			left: 0
+		},
+		onKeyDown,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			role: "menuitem",
+			className: "help-item",
+			"data-help": r.key,
+			title: r.title,
+			onClick: () => {
+				onCloseRef.current(false);
+				r.run();
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "help-label",
+				children: r.label
+			}), r.aside && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: r.aside.draft ? "help-draft" : "help-key",
+				title: r.aside.title,
+				children: r.aside.text
+			})]
+		}, r.key))
+	}), document.body);
 }
 //#endregion
 //#region src/lib/familyFold.ts
@@ -76152,14 +76375,7 @@ function Sidebar({ onOpenChat }) {
 								children: countHead
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FooterCustomize, {}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								id: "shortcuts-btn",
-								type: "button",
-								className: "foot-link",
-								title: "Keyboard shortcuts (?)",
-								onClick: () => ui.openDialogFor("shortcuts"),
-								children: "⌨ Shortcuts"
-							})
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(HelpMenu, {})
 						]
 					})
 				]
@@ -143142,6 +143358,7 @@ var NOTES = {
 		}
 	},
 	assistant: { text: "Chat, and its editable agent file" },
+	hub: { text: "Files, pictures and text every session can use — with a count of what an agent or your phone added" },
 	prompts: {
 		text: "Your saved prompts — pick one to paste it into the session you are in",
 		link: {
@@ -161911,6 +162128,12 @@ function HubDrawer() {
 	const focused = useUi((s) => s.focused);
 	const targets = hubTargets(useInstances().data);
 	const here = focused && targets.some((t) => t.title === focused) ? focused : "";
+	const wantAdd = useHubUi((s) => s.wantAdd);
+	(0, import_react.useEffect)(() => {
+		if (!wantAdd) return;
+		useHubUi.setState({ wantAdd: false });
+		fileInput.current?.click();
+	}, [wantAdd]);
 	(0, import_react.useEffect)(() => {
 		q.refetch();
 	}, []);

@@ -3,7 +3,7 @@
  * requests, Issues, Verify, Assistant — each hideable in Customize → Sidebar),
  * the addon-bars mount, filter, bulk bar, device-grouped session list with its
  * "Recently closed" link, and the footer (view picker + count + Customize
- * + Shortcuts). */
+ * + ? Help — feedback, keyboard shortcuts, what's new). */
 
 import { MemoryWaitBar } from "./MemoryWaitBar";
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -36,6 +36,7 @@ import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
 import { FooterCustomize } from "./FooterCustomize";
+import { HelpMenu } from "./HelpMenu";
 import {
   matchesFilter,
   matchesWindowFilter,
@@ -873,15 +874,8 @@ export function Sidebar({ onOpenChat }: Props) {
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
           <FooterCustomize />
-          <button
-            id="shortcuts-btn"
-            type="button"
-            className="foot-link"
-            title="Keyboard shortcuts (?)"
-            onClick={() => ui.openDialogFor("shortcuts")}
-          >
-            ⌨ Shortcuts
-          </button>
+          {/* Send feedback…, Keyboard shortcuts, What's new (HelpMenu). */}
+          <HelpMenu />
         </div>
       </footer>
     </aside>
