@@ -936,7 +936,7 @@ wheels = [
 
 [[package]]
 name = "mindflock"
-version = "0.14.29"
+version = "0.14.30"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
