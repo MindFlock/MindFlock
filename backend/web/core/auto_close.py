@@ -23,11 +23,17 @@ A session is closed when ALL of these hold (:func:`judge`):
    blocked means it waits on someone, so it stays — and nothing was sent to it
    since (a message, a queued prompt, a person typing); its agent is idle or
    gone (asleep counts), with no question or dialog up, no prompt queued, no
-   mail waiting, no background job, not shipping by itself.
+   mail waiting, no background job, not shipping by itself. A worker that
+   never reported (it stopped short of ``report_result``, or its parent
+   finished its work for it) counts as finished once it has commits of its
+   own and all of them are merged (rule 3's merged or PR-merged): the merge
+   is the parent saying it is done. It never closes on "no commits" alone.
 3. **Its work is accounted for.** A clean worktree, and its branch has no
    commits beyond its fork point, or every commit is reachable from its
-   parent's HEAD (the reachability ``kill_session(mode="delete")`` checks), or
-   its PR merged / was closed (a ``separate=true`` worker). Unmerged work is
+   parent's HEAD (the reachability ``kill_session(mode="delete")`` checks) or
+   from the HEAD of its own repository's main checkout (a parent sitting in
+   another repository merges there), or its PR merged / was closed (a
+   ``separate=true`` worker). Unmerged work is
    unfinished business, not clutter: it stays open. When its parent is gone
    it is an **orphan**: kept, and its row says "parent closed — review or
    close" (``auto_close.orphan_of``).
@@ -158,6 +164,7 @@ R_PARENT_BUSY = "its parent is still working"
 # Why a close was allowed (the log line).
 W_NO_COMMITS = "no commits of its own"
 W_MERGED = "merged into its parent"
+W_MERGED_HOME = "merged into its repository's checked-out branch"
 W_PR_MERGED = "its PR merged"
 W_PR_CLOSED = "its PR was closed"
 
@@ -548,6 +555,20 @@ def _parent_ref(srv, parent: str, orphan: Optional[dict], wt: str) -> Optional[s
     return None
 
 
+def _home_ref(wt: str) -> Optional[str]:
+    """HEAD of the main checkout of the worker's repository, or None when the
+    worktree IS that checkout or it can't be read. A parent whose own folder
+    is another repository (an orchestrator in one checkout driving workers
+    in a second repo) merges its workers there, so its HEAD never holds them."""
+    g = _git()
+    root = g.canonical_repo_root(wt)
+    if not root or os.path.normcase(os.path.realpath(root)) == os.path.normcase(
+        os.path.realpath(wt)
+    ):
+        return None
+    return g.head_sha(root) if os.path.isdir(root) else None
+
+
 def work_accounted(
     srv, inst, title: str, row: Mapping, parent: str, orphan: Optional[dict]
 ) -> Tuple[Optional[bool], str]:
@@ -572,6 +593,9 @@ def work_accounted(
     ref = _parent_ref(srv, parent, orphan, wt)
     if ref and g.commits_between(wt, ref, "HEAD", limit=1) == []:
         return True, W_MERGED
+    home = _home_ref(wt)
+    if home and home != ref and g.commits_between(wt, home, "HEAD", limit=1) == []:
+        return True, W_MERGED_HOME
     if row.get("pr_merged"):
         return True, W_PR_MERGED
     branch = str(row.get("branch") or getattr(inst, "Branch", "") or "")
@@ -586,7 +610,7 @@ def work_accounted(
         return True, W_PR_MERGED
     if state == "CLOSED":
         return True, W_PR_CLOSED
-    if base or ref:
+    if base or ref or home:
         return False, R_UNMERGED
     return None, R_UNKNOWN_GIT
 
@@ -767,16 +791,18 @@ def judge(
     rep = row.get("last_report") if parent else None
     if not isinstance(rep, Mapping) and orphan is not None:
         rep = orphan.get("report")
-    if not isinstance(rep, Mapping):
-        return _stay(R_NO_REPORT)
-    status = str(rep.get("status") or "")
-    if status == "blocked":
-        return _stay(R_BLOCKED)
-    if status not in ("done", "failed"):
-        return _stay(R_NO_REPORT)
-    rep_ts = float(rep.get("ts") or 0.0)
-    if _last_poke(srv, title) > rep_ts:
-        return _stay(R_NEW_WORK)
+    # No report at all: finished only if its merged commits say so (rule 3).
+    unreported = not isinstance(rep, Mapping)
+    rep_ts = 0.0
+    if not unreported:
+        status = str(rep.get("status") or "")
+        if status == "blocked":
+            return _stay(R_BLOCKED)
+        if status not in ("done", "failed"):
+            return _stay(R_NO_REPORT)
+        rep_ts = float(rep.get("ts") or 0.0)
+        if _last_poke(srv, title) > rep_ts:
+            return _stay(R_NEW_WORK)
     asleep = bool(row.get("sleeping"))
     activity = str(row.get("activity") or "")
     if not asleep and activity not in ("idle", "offline"):
@@ -814,6 +840,14 @@ def judge(
     ok, how = work_accounted(srv, inst, title, row, parent, orphan)
     if not ok:
         return _stay(how)
+    if unreported:
+        # Merged means "had commits, all landed" only against a known fork
+        # point (without one, a commitless worker reads as merged too).
+        if how not in (W_MERGED, W_MERGED_HOME, W_PR_MERGED) or not _base_sha(inst):
+            return _stay(R_NO_REPORT)  # nothing merged says it is done
+        if parent and _parent_busy(srv, parent):
+            # The parent merged it mid-turn and may still be using it.
+            return WAIT, R_PARENT_BUSY, None
     if how == W_NO_COMMITS and parent and _parent_busy(srv, parent):
         # Nothing to merge is not "nothing left to do with it": its parent,
         # still mid-turn, may be about to send it or read its folder.
