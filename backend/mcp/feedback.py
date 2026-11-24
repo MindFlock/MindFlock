@@ -19,19 +19,23 @@ __all__ = ["FeedbackTools", "D_REPORT_ISSUE", "S_REPORT_ISSUE"]
 
 D_REPORT_ISSUE = (
     "Draft a report about MindFlock ITSELF (the app, its CLI, this MCP) for "
-    "the MindFlock developers: a bug the user hit, or an idea or feedback "
-    "they voiced. Use it when the user asks to report it, or offer it when "
-    "they are clearly stuck on a MindFlock fault; not for problems in the "
-    "user's own project or in the agent CLI. It only DRAFTS: the app opens "
-    "the draft for the user, who reads, edits and sends it; nothing is "
-    "posted by you. Sent, it is a PUBLIC GitHub issue on MindFlock/MindFlock, "
-    "so write it for strangers: title = one specific line; body = what "
-    "happened, what was expected, steps to reproduce, exact error text. "
-    "Never include the user's code, repository or company names, ticket "
-    "contents, file paths, host names, tokens or anything else private: "
-    "describe the situation in general words. MindFlock adds its version "
-    "and OS. kind: bug (default) | idea | feedback. Returns {drafted, id, "
-    "tell}: say `tell` to the user."
+    "the MindFlock developers. OFFER it when: a MindFlock tool, CLI or UI "
+    "behaved differently from what its docs or messages say; a MindFlock "
+    "tool returned an internal or server error; the user complains about "
+    'MindFlock ("this is broken", "why does MindFlock keep..."); you had '
+    "to work around a MindFlock limitation; the user voices an idea for "
+    "MindFlock. Offer once per problem, in one line, at a natural pause, "
+    "without derailing the task, and call this only after the user agrees "
+    "(or asks to report). Not for problems in the user's own project or in "
+    "the agent CLI. It only DRAFTS: the app opens the draft for the user, "
+    "who reads, edits and sends it; nothing is posted by you. Sent, it is a "
+    "PUBLIC GitHub issue on MindFlock/MindFlock, so write it for strangers: "
+    "title = one specific line; body = what happened, what was expected, "
+    "steps to reproduce, exact error text. Never include the user's code, "
+    "repository or company names, ticket contents, file paths, host names, "
+    "tokens or anything else private: describe the situation in general "
+    "words. MindFlock adds its version and OS. kind: bug (default) | idea | "
+    "feedback. Returns {drafted, id, tell}: say `tell` to the user."
 )
 
 S_REPORT_ISSUE: Dict[str, Any] = {

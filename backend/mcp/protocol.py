@@ -56,6 +56,7 @@ __all__ = [
     "INTERNAL_ERROR",
     "Cancelled",
     "ToolError",
+    "FAULT_HINT",
     "Tool",
     "ToolContext",
     "McpServer",
@@ -104,12 +105,46 @@ class Cancelled(Exception):
 class ToolError(Exception):
     """A tool failed in a way the model should see: becomes a result with
     ``isError: true`` whose text is the message (plus ``data`` as JSON when
-    given, so e.g. the unmerged commits behind a refusal stay visible)."""
+    given, so e.g. the unmerged commits behind a refusal stay visible).
 
-    def __init__(self, message: str, data: Optional[dict] = None) -> None:
+    ``fault=True`` marks a MindFlock FAULT rather than an ordinary refusal;
+    a ToolError raised while handling a server-fault ``ApiError`` (one
+    :mod:`backend.mcp.api` marked ``fault``) counts as one too, so the many
+    tools that translate an ``ApiError`` need no change. A fault result gets
+    :data:`FAULT_HINT` (see :meth:`McpServer._fault_hint`)."""
+
+    def __init__(
+        self, message: str, data: Optional[dict] = None, *, fault: bool = False
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.data = data
+        self.fault = fault
+
+
+#: Appended (once per server process per tool + error kind) to a tool result
+#: that failed because of a MindFlock fault — a crash, or a server 500 — so
+#: an agent on ANY CLI offers ``report_issue`` instead of silently working
+#: around the bug. Offer first: every draft pops a toast in the app.
+FAULT_HINT = (
+    "This looks like a MindFlock fault, not yours: tell the user and offer "
+    "(one line) to draft a report with the report_issue tool; draft it "
+    "only if they agree."
+)
+
+
+def _fault_kind(err: BaseException) -> Optional[str]:
+    """The error kind (``http 500``, ``fault``) when ``err`` or an exception
+    it was raised from / while handling is marked ``fault``, else None."""
+    seen = 0
+    cur: Optional[BaseException] = err
+    while cur is not None and seen < 8:
+        if getattr(cur, "fault", False):
+            status = getattr(cur, "status", None)
+            return "http %s" % status if status else "fault"
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    return None
 
 
 @dataclass
@@ -457,6 +492,8 @@ class McpServer:
         self._write_lock = threading.Lock()
         self._calls_lock = threading.Lock()
         self._calls: Dict[Any, ToolContext] = {}
+        #: (tool, error kind) pairs already given FAULT_HINT (_fault_hint).
+        self._fault_hinted: set = set()
         # While the reader thread handles a JSON-RPC batch, its synchronous
         # replies are collected here and written as ONE array (JSON-RPC 2.0
         # §6); worker threads never see it.
@@ -712,11 +749,15 @@ class McpServer:
             result = None
         except ToolError as err:
             result = self._error_result(err.message, err.data)
+            kind = _fault_kind(err)
+            if kind:
+                self._fault_hint(result, tool.name, kind)
         except Exception as err:  # noqa: BLE001 — never kill the server
             _log.exception("mcp: tool %s crashed", tool.name)
             result = self._error_result(
                 "internal error in %s: %s: %s" % (tool.name, type(err).__name__, err)
             )
+            self._fault_hint(result, tool.name, type(err).__name__)
         finally:
             with self._calls_lock:
                 self._calls.pop(ctx.request_id, None)
@@ -743,6 +784,18 @@ class McpServer:
         ):
             out["structuredContent"] = json.loads(text)
         return out
+
+    def _fault_hint(self, result: dict, tool: str, kind: str) -> None:
+        """Append :data:`FAULT_HINT` to a fault ``result`` — at most once per
+        (tool, kind) per process, so a failure in a loop doesn't nag; never on
+        ``report_issue``'s own failure, nor where it isn't served (peer)."""
+        if tool == "report_issue" or "report_issue" not in self.tools:
+            return
+        with self._calls_lock:
+            if (tool, kind) in self._fault_hinted:
+                return
+            self._fault_hinted.add((tool, kind))
+        result["content"][0]["text"] += "\n" + FAULT_HINT
 
     @staticmethod
     def _error_result(message: str, data: Optional[dict] = None) -> dict:
