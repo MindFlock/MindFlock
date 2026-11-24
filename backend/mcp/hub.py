@@ -281,7 +281,7 @@ class HubTools:
             if not items and not any(d["items"] for d in devices):
                 out["hint"] = (
                     "nothing in Shared files yet — the user adds items in the app "
-                    "(⋯ → Shared files), or put one with action=put"
+                    "(the sidebar's Shared files), or put one with action=put"
                 )
             return out
         if action == "get":

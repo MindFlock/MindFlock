@@ -2744,7 +2744,7 @@
         Object.keys(hubPicked).forEach(function (id) { if (!live[id]) delete hubPicked[id]; else hubPicked[id] = live[id]; });
         hubRenderSel();
         if (!items.length) {
-          hubListEl.appendChild(folderNote("Nothing in Shared files yet. Add a photo or file above — or on the computer, drop or paste one in Shared files (⋯ menu)."));
+          hubListEl.appendChild(folderNote("Nothing in Shared files yet. Add a photo or file above — or on the computer, drop or paste one in Shared files (in the sidebar)."));
           return;
         }
         items.slice(0, 60).forEach(function (it) { hubListEl.appendChild(hubRow(it)); });

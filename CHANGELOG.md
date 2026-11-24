@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Shared files is a row of the sidebar, not a ⋯ menu item.** It sits with
+  the other tool rows — right under To-do (or the Assistant when To-do is
+  off) — with **Open** (the drawer, as Alt+H does) and **Add** (the drawer,
+  straight into its file picker), and a calm accent count of what an agent or
+  your phone added since you last looked. It is a Customize → Sidebar bar like
+  the others, shown by default (hidden in the calm first hour, like the
+  Assistant); a saved sidebar order that never placed it gets it under To-do.
+  In a narrow window its buttons close the sidebar drawer first so it never
+  covers the Shared files drawer. Alt+H, the palette, the `file:` picker and
+  the 📎 still open it with the sidebar hidden; a guest link still has none.
+  The top bar's **⋯** is back to what it was before 0.14.28: it appears only
+  when a narrow window folds something. The texts that pointed at "⋯ → Shared
+  files" (the phone page's empty list, the `mindflock hub` empty list, the
+  `hub` tool's hint and the not-found errors) now point at the sidebar.
+- **Feedback is in a new "? Help" menu at the foot of the sidebar.** The
+  menu — beside ⚙ Customize, in place of the ⌨ Shortcuts link — holds **Send
+  feedback…** (the same box), **Keyboard shortcuts** (`?` still opens the
+  sheet) and **What's new**. The Feedback link beside the version in the top
+  bar is gone; the palette's "Send feedback or report a problem…" and the
+  agents' `report_issue` stay (its reply now says where the draft waits). A
+  report an agent drafted is a small accent dot on **? Help** and "1 draft" on
+  **Send feedback…** until it is sent or discarded, so a draft whose toast went
+  by is not lost. No Docs row: the app links to no documentation site.
+
 ## [0.14.28] - 2026-11-23
 
 ### Added

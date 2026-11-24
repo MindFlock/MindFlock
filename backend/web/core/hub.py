@@ -481,7 +481,7 @@ def check_id(raw) -> str:
             404,
             "not_found",
             "%s is not a shared-file code — they look like file:k7m2 (see Shared "
-            "files in the ⋯ menu, or mindflock hub ls)" % clean_line(raw, 40),
+            "files in the app's sidebar, or mindflock hub ls)" % clean_line(raw, 40),
         )
     return v
 
@@ -497,8 +497,8 @@ def _not_found(iid: str, doc: dict) -> Refusal:
     return Refusal(
         404,
         "not_found",
-        "there is no file:%s in Shared files — check the code there (⋯ → Shared "
-        "files, or mindflock hub ls)" % iid,
+        "there is no file:%s in Shared files — check the code there (the "
+        "sidebar's Shared files, or mindflock hub ls)" % iid,
     )
 
 

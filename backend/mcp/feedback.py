@@ -89,9 +89,9 @@ class FeedbackTools:
             "id": rec.get("id"),
             "title": rec.get("title"),
             "tell": (
-                "I drafted the report. It is open in MindFlock (top bar → "
-                "Feedback) for you to read and send; nothing is posted until "
-                "you press Send."
+                "I drafted the report. It is waiting in MindFlock (? Help → "
+                "Send feedback…, at the foot of the sidebar) for you to read "
+                "and send; nothing is posted until you press Send."
             ),
         }
         if rec.get("removed"):

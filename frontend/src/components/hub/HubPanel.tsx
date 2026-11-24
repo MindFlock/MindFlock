@@ -3,7 +3,8 @@
  * filtered by kind (All · Pictures · Text · From agents) — and is the one
  * place items are added (drop, Add files…, New snippet, or Ctrl/⌘+V while it
  * is open) and used (Send to session…, the code chip, Pin, and the ⋯ menu).
- * Opened from the top bar's ⋯ menu, Alt+H or the command palette.
+ * Opened from the sidebar's Shared files row (Open, or Add straight into
+ * the file picker), Alt+H or the command palette.
  *
  * Several at once: each card has a checkbox (shown on hover or focus, and on
  * every card once one is ticked; Shift+click ticks a range; "Select all"
@@ -268,7 +269,16 @@ function HubDrawer() {
   const targets = hubTargets(useInstances().data as Instance[] | undefined);
   const here = focused && targets.some((t) => t.title === focused) ? focused : "";
 
-  // Opening it always reads the list afresh (the ⋯ menu's copy may be old).
+  // The sidebar row's Add: open the file picker (the drawer may already be
+  // open). Still inside the click's user activation, so the browser allows it.
+  const wantAdd = useHubUi((s) => s.wantAdd);
+  useEffect(() => {
+    if (!wantAdd) return;
+    useHubUi.setState({ wantAdd: false });
+    fileInput.current?.click();
+  }, [wantAdd]);
+
+  // Opening it always reads the list afresh (the sidebar row's copy may be old).
   useEffect(() => {
     void q.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps

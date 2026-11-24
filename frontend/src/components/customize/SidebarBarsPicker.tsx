@@ -41,6 +41,7 @@ const NOTES: Record<string, BarNote> = {
     link: { label: "Intake → GitHub issues", dialog: "intake", target: "issues" },
   },
   assistant: { text: "Chat, and its editable agent file" },
+  hub: { text: "Files, pictures and text every session can use — with a count of what an agent or your phone added" },
   prompts: {
     text: "Your saved prompts — pick one to paste it into the session you are in",
     link: { label: "Manage prompts", dialog: "prompts" },

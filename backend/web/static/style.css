@@ -19352,26 +19352,6 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   font-size: 12.5px;
 }
 
-/* The top bar's way in: quiet, beside the version. */
-#topbar .tb-feedback {
-  margin-left: 8px;
-  pointer-events: auto;
-  background: none;
-  border: 0;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-#topbar .tb-feedback:hover,
-#topbar .tb-feedback:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-}
-
 @layer tokens, base, components, theme;
 
 /* Global stylesheet manifest — the only file that knows the whole picture.
@@ -20141,41 +20121,6 @@ body #mf-winctl {
   color: var(--red-ink);
 }
 
-/* Shared files' count (its ⋯ row): what an agent or your phone added since
-   you last looked — "new", in the accent, never in the bell's red (nothing in
-   it needs you). */
-#topbar .tb-count.is-new {
-  background: var(--accent);
-  color: var(--accent-ink);
-  padding: 0 5px;
-}
-
-/* The same count on ⋯ itself: a small calm dot in the accent at the glyph's
-   corner, so something new in Shared files is not lost in the menu. It
-   overlays the icon (absolute), so it never widens the bar. */
-#topbar #more-btn {
-  position: relative;
-}
-
-#topbar .tb-new-dot {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  box-sizing: border-box;
-  border-radius: 7px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 8.5px;
-  font-weight: 700;
-  line-height: 13px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
 /* A checklist FAILED: the count is red, not the usual accent. */
 #topbar .tb-count.is-failing {
   background: var(--red);
@@ -20348,23 +20293,6 @@ body #mf-winctl {
   outline: none;
 }
 
-/* Shared files' row (always first) and the line between it and what a
-   narrow bar folded. */
-#topbar .tb-more-menu .tb-more-item.is-on {
-  font-weight: 600;
-}
-
-#topbar .tb-more-menu .tb-more-key {
-  color: var(--app-muted, var(--muted));
-  font-size: 11px;
-}
-
-#topbar .tb-more-menu .tb-more-sep {
-  height: 1px;
-  margin: 3px 4px;
-  background: var(--app-border, var(--border));
-}
-
 /* Grid · Sky: the main area's two views (lib/viewMode), a segmented pair of
    .tb-items beside New. The active one is filled, like a pressed key; on
    a phone-narrow window the words go and the glyphs stay. */
@@ -20534,8 +20462,8 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   display: none;
 }
 
-/* Tools row: session count on the left, a subtle keyboard-shortcuts link on
-   the right (status-bar-style help affordance). */
+/* Tools row: session count on the left, ⚙ Customize, and ? Help on the
+   right (status-bar-style help affordance; HelpMenu.tsx). */
 #sidebar-footer .foot-row.foot-tools {
   justify-content: space-between;
 }
@@ -20578,6 +20506,108 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
 
 #sidebar-footer .foot-link:hover {
   color: var(--text);
+}
+
+/* ? Help (HelpMenu.tsx). The "?" sits in a small ring so it reads as the
+   help glyph, not punctuation. An agent's drafted report waiting to be read
+   is a calm accent dot at its corner — never the red of something failing. */
+#sidebar-footer #help-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#sidebar-footer #help-btn[aria-expanded="true"] {
+  color: var(--text);
+}
+
+#sidebar-footer #help-btn .help-q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8.5px;
+  font-weight: 700;
+}
+
+#sidebar-footer #help-btn .help-draft-dot {
+  position: absolute;
+  top: -3px;
+  left: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--panel);
+  pointer-events: none;
+}
+
+/* The menu: body-mounted and fixed (the sidebar scrolls and clips), above
+   the foot. The look of the top bar's ⋯ menu and the Prompts menu. */
+#help-menu {
+  position: fixed;
+  z-index: 3000;
+  box-sizing: border-box;
+  min-width: 200px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  -webkit-app-region: no-drag;
+}
+
+#help-menu .help-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#help-menu .help-item:hover,
+#help-menu .help-item:focus-visible,
+#help-menu .help-item:focus {
+  background: var(--panel-2);
+  outline: none;
+}
+
+#help-menu .help-key {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* "1 draft": the extension bars' calm accent pill (.ext-badge). */
+#help-menu .help-draft {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
 }
 
 /* "Recently closed (n)" — under the session list, only while there is
@@ -22868,6 +22898,74 @@ p.set-hint {
 
 #assistant-bar .as-toggle:hover,
 #prompts-bar .as-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Shared files (HubBar.tsx): the Assistant row's anatomy, plus a calm count
+   of what an agent or your phone added since you last looked — the extension
+   bars' accent pill (.ext-badge), never the red of something that needs you.
+   It rides inside the label's flex:1 box, so the buttons never move. */
+#hub-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#hub-bar .hb-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+#hub-bar .hb-label-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#hub-bar .hb-new {
+  flex: none;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+#hub-bar .hb-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+#hub-bar .as-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+}
+
+#hub-bar .as-toggle:hover,
+#hub-bar .as-toggle.active {
   border-color: var(--accent);
 }
 

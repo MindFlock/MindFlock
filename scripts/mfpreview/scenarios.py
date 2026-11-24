@@ -344,7 +344,7 @@ ROUTE_SESSIONS = [r["session"] for r in ROUTES.values() if r["session"]]
 
 SCENARIOS: Dict[str, Dict[str, Any]] = {
     "hub": {
-        "summary": "Shared files (the ⋯ menu, #hub): a screenshot, a log, an SQL "
+        "summary": "Shared files (the sidebar row, #hub): a screenshot, a log, an SQL "
         "snippet with a note, a PDF, a phone screenshot and a picture an agent "
         "put — beside three sessions to send them to.",
         "sessions": ["api-auth", "billing-export", "docs-refresh"],
