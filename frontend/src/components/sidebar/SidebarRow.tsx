@@ -713,15 +713,27 @@ export const SidebarRow = memo(function SidebarRow({
                 onChange={() => renameTaken && setRenameTaken("")}
                 onBlur={(e) => commitRename(e.currentTarget.value)}
                 onKeyDown={(e) => {
+                  // Ended from the keyboard, the keyboard goes back to the
+                  // row (F2 started on it) once the input is gone, not to the
+                  // page; a rename moves it on to the renamed row
+                  // (lib/renameFocus). A click away (blur) keeps its target.
+                  const row = e.currentTarget.closest("li");
+                  const backToRow = () =>
+                    requestAnimationFrame(() => {
+                      if (row?.isConnected && (!document.activeElement || document.activeElement === document.body))
+                        row.focus({ preventScroll: true });
+                    });
                   if (e.key === "Enter") {
                     e.preventDefault();
                     commitRename(e.currentTarget.value);
+                    backToRow();
                   } else if (e.key === "Escape") {
                     e.preventDefault();
                     cancelled.current = true;
                     editEndedAt.current = Date.now();
                     setRenameTaken("");
                     setEditing(false);
+                    backToRow();
                   }
                 }}
               />
