@@ -804,7 +804,8 @@ list, a **Recently closed** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
 count, **⚙ Customize** (see [Customize](#customize)) and **? Help** — a menu,
-opening upward, of **Send feedback…** (see [Feedback](#feedback)), **Keyboard
+opening upward, of **Ask how something works…** (see [Ask how something
+works](#ask-how-something-works)), **Send feedback…** (see [Feedback](#feedback)), **Keyboard
 shortcuts** (the shortcut sheet; `?` still opens it) and **What's new** (this
 release's notes; the version in the top bar opens them too). There is no Docs
 row: the app links to no documentation site. The menu takes ↑/↓/Home/End, Esc
@@ -3141,6 +3142,64 @@ closes — never polled). Nothing is sent until you press Send. **Discard
 draft** throws it away. Not shown to a guest. (It used to be a **Feedback**
 link beside the version in the top bar; the owner moved it into **? Help**,
 where Linear, Notion and Figma keep theirs.)
+
+## Ask how something works
+
+**? Help → Ask how something works…** (the menu's first row, and "Ask how
+something works…" in the palette) opens a small box at the foot of the
+sidebar for a question about MindFlock itself — "how do I schedule a
+template?", "where do I change the theme?", "what does Goes as far as do?".
+It is for learning the app, not a chat with an agent
+(`frontend/src/components/helpAsk/`, `lib/helpAsk.ts`, `lib/helpPlaces.ts`;
+the server's `core/help_ask.py`, [`POST /api/help/ask`](web-api.md#help-apihelp)).
+
+**Where it sits.** Beside the sidebar's foot, its bottom on the window's, so
+it never covers the sessions a pointer may ring; with the sidebar hidden, or
+in a phone-narrow window, in the window's bottom-left corner. It is not a
+modal: the app stays live behind it; ✕ or Esc closes it (Esc while a
+question is out cancels the question). Empty, it offers four starter
+questions the docs answer well and says once what answers them. No keyboard
+shortcut: `?` is the shortcut sheet, Alt+H is Shared files, and F1 is the
+browser's own help.
+
+**An answer** has up to two parts:
+
+- **The text** — a few short sentences or numbered steps from the docs
+  (inline `code` kept), with the section it came from under it (**From
+  web-ui.md › Themes**) and **Read the section** to show that passage. It is
+  worded by the same quick model call voice help makes (the `claude` CLI,
+  Haiku, through your own Claude sign-in); without it — no `claude`, offline,
+  a failure, or more than eight questions a minute — it is the section's
+  first sentences, marked *the docs' own words*. When the docs don't cover
+  the question it says so and offers **Send feedback…**; it never guesses.
+- **Show me** — up to three places in the app. Clicking one does what the
+  place needs first (opens Settings on its screen, a dialog on its tab, the
+  sidebar, the Grid or the Sky, Shared files), then rings it exactly like a
+  tour step (the coach mark's ring and card, Done or Esc to close) while the
+  box steps aside. A place that still isn't on screen is never ringed: the
+  card says in words where it is ("Press Ctrl+Shift+T to reopen the last
+  one…"). A question that only asks *where* something is ("where is the
+  bell", "where do my worktrees live") shows its first place at once and,
+  answered without the model, leads with that place's way there ("Click the
+  bell in the top bar.") with the nearest docs section under it as *Also in
+  the docs*.
+
+**The places** are one registry (`lib/helpPlaces.ts`, 62 today: 25 written
+by hand, 37 from Settings search): the top bar's buttons, the sidebar's parts, the dialogs' first controls (each toured
+one takes its target from its tour's step), and one place per Settings search
+entry — generated from that list, so a new Settings entry is a place without
+an edit here. Matching a question to places needs no model: the question's
+words against each place's label, keywords and caption, weighted by how rare
+each word is among the places. With the model, the same call may name up to
+three place ids from the list it is given; anything else is dropped, and the
+words' own matches are used when it names none. A test pins every place's
+target hook (`#id`, `.class`, `[data-tour="…"]`) to a component that renders
+it, so a renamed hook fails a test instead of a pointer.
+
+The answer can make the app do exactly one thing: show registry places. Its
+text is shown as text. Holding Enter sends one question; a question asked
+within 1.2 s of the last waits out the gap. Not shown to a guest (no row, no
+palette entry, and the server refuses one).
 
 ## Shared files
 

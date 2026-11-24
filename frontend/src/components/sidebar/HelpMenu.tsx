@@ -1,6 +1,8 @@
 /** The sidebar foot's "? Help": one button, one menu, where Linear, Notion
  * and Figma keep theirs — bottom left. In this order:
  *
+ *   Ask how something works…  a question about the app, answered from its
+ *                       docs with pointers at the real UI (lib/helpAsk)
  *   Send feedback…      the feedback box (lib/feedback.ts), unchanged
  *   Keyboard shortcuts  the shortcut sheet ("?" still opens it too)
  *   What's new          this release's notes (components/whatsNew)
@@ -11,8 +13,8 @@
  * An agent's drafted report (the MCP's `report_issue`) waiting for the person
  * to read is a calm accent mark on the button and a "1 draft" pill on Send
  * feedback… (useFeedbackDrafts) — the toast that offered it goes away, the
- * draft must not. A guest link has no feedback (the server refuses a guest):
- * no row, no read.
+ * draft must not. A guest link has no feedback and no questions (the server
+ * refuses a guest both): no rows, no read.
  *
  * Behaves like the app's other menus: real buttons with role="menuitem",
  * the first focused on open, ↑/↓/Home/End move, Esc (or Tab) closes and
@@ -26,6 +28,7 @@ import { createPortal } from "react-dom";
 import { useUi } from "../../state/store";
 import { useConfig } from "../../state/queries";
 import { openFeedback, useFeedbackDrafts } from "../../lib/feedback";
+import { openAskHelp } from "../../lib/helpAsk";
 import { openWhatsNew } from "../whatsNew/WhatsNew";
 import { keymapVersion, subscribeKeymap } from "../../lib/keymap";
 import { inShell } from "../../lib/shell";
@@ -52,6 +55,12 @@ export function HelpMenu() {
   const draftLine =
     drafts === 1 ? "An agent drafted a report for you to read" : drafts + " reports drafted by an agent wait for you to read";
   const rows = ([
+    !guest && {
+      key: "ask",
+      label: "Ask how something works…",
+      title: "Ask a question about MindFlock: an answer from its docs, and where to find it",
+      run: () => openAskHelp(),
+    },
     !guest && {
       key: "feedback",
       label: "Send feedback…",
@@ -86,7 +95,7 @@ export function HelpMenu() {
         id="help-btn"
         type="button"
         className={"foot-link" + (drafts > 0 ? " has-draft" : "")}
-        title={"Help — send feedback, keyboard shortcuts, what's new" + (drafts > 0 ? "\n" + draftLine : "")}
+        title={"Help — ask how something works, send feedback, keyboard shortcuts, what's new" + (drafts > 0 ? "\n" + draftLine : "")}
         aria-label={drafts > 0 ? "Help, " + draftLine.toLowerCase() : "Help"}
         aria-haspopup="menu"
         aria-expanded={open}

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ask how something works.** **? Help** at the foot of the sidebar has a
+  new first row, **Ask how something works…** (also in the palette): a small
+  box beside the sidebar's foot where you ask how MindFlock works — "how do I
+  schedule a template?", "where do I change the theme?" — and get a short
+  answer from MindFlock's own docs, the section it came from (one click shows
+  the passage), and up to three **Show me** buttons. Show me opens what the
+  place needs (Settings on the right screen, a dialog, the sidebar) and rings
+  it the way the tours do; a "where is…" question shows its place at once.
+  The answer is worded by the same quick Claude Haiku call voice help makes,
+  through your own Claude sign-in; without it you get the docs' own words.
+  When the docs don't cover a question it says so and offers **Send
+  feedback…** instead of guessing. Not for a guest link. API: `POST
+  /api/help/ask`.
+
+### Changed
+
+- **A one-step coach mark drops its "1 of 1", dots and Back.** Only a Show me
+  pointer has one step; the tours are unchanged.
+
 ## [0.14.29] - 2026-11-23
 
 ### Changed

@@ -733,6 +733,7 @@ from backend.web.routes import memory as _memory_routes
 from backend.web.routes import cleanup as _cleanup_routes
 from backend.web.routes import hub as _hub_routes
 from backend.web.routes import feedback as _feedback_routes
+from backend.web.routes import help as _help_routes
 from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -11791,6 +11792,9 @@ app.include_router(_hub_routes.router)
 
 # --- Feedback (report a MindFlock problem or idea): routes/feedback.py ------
 app.include_router(_feedback_routes.router)
+
+# --- Ask how something works (questions about MindFlock): routes/help.py -----
+app.include_router(_help_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------

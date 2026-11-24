@@ -307,6 +307,9 @@ export function CoachTour({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const step = steps[i];
   const last = i >= steps.length - 1;
+  // One step (a "Show me" pointer, components/helpAsk): no "1 of 1", no dots,
+  // no Back — just the card and Done.
+  const single = steps.length === 1;
   const contained = !!rootRef;
 
   const measure = useCallback(() => {
@@ -471,9 +474,7 @@ export function CoachTour({
         onKeyDown={onKey}
       >
         <div className={c("head")}>
-          <span className={c("step")}>
-            {i + 1} of {steps.length}
-          </span>
+          <span className={c("step")}>{single ? "" : `${i + 1} of ${steps.length}`}</span>
           <button type="button" className={c("skip")} onClick={onClose}>
             {skipLabel}
           </button>
@@ -482,13 +483,13 @@ export function CoachTour({
         <p className={c("body")}>{step.body}</p>
         <div className={c("foot")}>
           <span className={c("dots")} aria-hidden="true">
-            {steps.map((_, k) => (
-              <i key={k} className={k === i ? "on" : ""} />
-            ))}
+            {!single && steps.map((_, k) => <i key={k} className={k === i ? "on" : ""} />)}
           </span>
-          <button type="button" className={buttonClass + " " + c("back")} disabled={i === 0} onClick={() => go(i - 1)}>
-            Back
-          </button>
+          {!single && (
+            <button type="button" className={buttonClass + " " + c("back")} disabled={i === 0} onClick={() => go(i - 1)}>
+              Back
+            </button>
+          )}
           <button
             type="button"
             className={buttonClass + " on " + c("next")}
