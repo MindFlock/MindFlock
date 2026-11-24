@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Renaming a session keeps you on it.** The rail row, the grid pane and the
+  Sky line are keyed by the session's name, so a rename rebuilt them and the
+  keyboard fell to the page: the session stayed selected, but arrows, Delete
+  and typing no longer reached it. The keyboard now lands back on the
+  renamed session, on the same kind of element it was on: the rail row after
+  F2, the Sky line after renaming from its bar, and the terminal after the
+  Rename dialog. It is left alone if you have clicked elsewhere meanwhile.
+  Enter or Escape in the rail's rename box also returns to the row now, even
+  when the name did not change.
+
 ## [0.14.30] - 2026-11-24
 
 ### Added

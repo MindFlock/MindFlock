@@ -41807,6 +41807,57 @@ function redZoneChip(rz, seenAt) {
 	return null;
 }
 //#endregion
+//#region src/lib/renameFocus.ts
+var ATTRS = ["data-title", "data-line"];
+function focusSpot(title) {
+	if (!title || typeof document === "undefined") return null;
+	const active = document.activeElement;
+	if (!active || active === document.body) return null;
+	for (let el = active; el; el = el.parentElement) for (const attr of ATTRS) if (el.getAttribute(attr) === title) return {
+		attr,
+		tag: el.tagName,
+		cls: el.classList[0] || "",
+		term: active.classList.contains("xterm-helper-textarea")
+	};
+	return null;
+}
+var PANE_TERMINAL = {
+	attr: "data-title",
+	tag: "SECTION",
+	cls: "pane",
+	term: true
+};
+function findSpot(spot, title) {
+	for (const el of Array.from(document.querySelectorAll(`[${spot.attr}]`))) {
+		if (el.getAttribute(spot.attr) !== title || el.tagName !== spot.tag) continue;
+		if (spot.cls && !el.classList.contains(spot.cls)) continue;
+		return el;
+	}
+	return null;
+}
+function keepFocusAcrossRename(spot, to, budgetMs = 2e3) {
+	if (!spot || !to || typeof document === "undefined" || typeof requestAnimationFrame !== "function") return;
+	const was = document.activeElement;
+	const until = Date.now() + budgetMs;
+	const tick = () => {
+		if (Date.now() > until) return;
+		const active = document.activeElement;
+		const lost = !active || active === document.body || !active.isConnected;
+		if (!lost && active !== was) return;
+		const target = findSpot(spot, to);
+		if (!lost && target && target.contains(active)) return;
+		if (target && lost) {
+			const into = spot.term ? target.querySelector(".xterm-helper-textarea") : target;
+			if (into) {
+				into.focus({ preventScroll: true });
+				return;
+			}
+		}
+		requestAnimationFrame(tick);
+	};
+	requestAnimationFrame(tick);
+}
+//#endregion
 //#region src/lib/skyNodePos.ts
 var KEY = "mf_sky_node_pos";
 function read() {
@@ -41972,11 +42023,15 @@ async function renameSession(title, name, opts = {}) {
 		return title;
 	}
 	if (next === title) return "";
+	let spot = focusSpot(title);
 	try {
 		const r = await instApi(title, "/rename", { json: { to: next } });
 		const now = r && typeof r.title === "string" && r.title || next;
 		if (r?.unchanged || now === title) return "";
+		const sel = useUi.getState().focused;
+		spot = spot || focusSpot(title) || focusSpot(now) || (sel === title || sel === now ? PANE_TERMINAL : null);
 		moveSessionTitle(title, now);
+		keepFocusAcrossRename(spot, now);
 		toast(`Renamed to “${now}”`);
 		refreshInstances();
 		return now;
@@ -71092,15 +71147,21 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 								onChange: () => renameTaken && setRenameTaken(""),
 								onBlur: (e) => commitRename(e.currentTarget.value),
 								onKeyDown: (e) => {
+									const row = e.currentTarget.closest("li");
+									const backToRow = () => requestAnimationFrame(() => {
+										if (row?.isConnected && (!document.activeElement || document.activeElement === document.body)) row.focus({ preventScroll: true });
+									});
 									if (e.key === "Enter") {
 										e.preventDefault();
 										commitRename(e.currentTarget.value);
+										backToRow();
 									} else if (e.key === "Escape") {
 										e.preventDefault();
 										cancelled.current = true;
 										editEndedAt.current = Date.now();
 										setRenameTaken("");
 										setEditing(false);
+										backToRow();
 									}
 								}
 							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
