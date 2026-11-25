@@ -251,6 +251,13 @@ def _auto_close(old: str, new: str) -> None:
     m.rename(old, new)
 
 
+def _favorites(old: str, new: str) -> None:
+    """A favorite's star follows its rename (core.favorites)."""
+    from backend.web.core import favorites as m
+
+    m.rename(old, new)
+
+
 def _remote_origin(old: str, new: str) -> None:
     """Where a session another device started came from (and its turn /
     report bookkeeping) follows the rename."""
@@ -555,6 +562,7 @@ def install() -> None:
     register("mailbox", _mailbox, files=("mailbox.json",))
     register("finished children", _finished_children, files=("finished_children.json",))
     register("auto-close", _auto_close, files=("auto_close.json",))
+    register("favorites", _favorites, files=("favorites.json",))
     register("remote origin", _remote_origin, files=("remote_origin.json",))
     register("flights", _flights, files=("flights.json",))
     register("worker order", _worker_order, files=("worker_order.json",))

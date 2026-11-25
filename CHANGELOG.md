@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Favorite sessions.** For the work you keep coming back to: a session's
+  ⋯ menu → **Add to favorites** stars it (★ before its name), and a new
+  **★ Favorites** link beside Recently closed lists every favorite, open or
+  closed. An open one is a click away; a closed one reopens with the same
+  folder, branch and conversation, so you keep using the same session
+  instead of starting a new one each time. A favorite never closes by
+  itself, and a rename keeps its star.
+
 ## [0.14.33] - 2026-11-25
 
 ### Fixed

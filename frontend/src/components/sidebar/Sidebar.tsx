@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
+import { FAVORITES_KEY } from "../../lib/favorites";
 import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
 import { needsYouBadge, useNeedsYou } from "../../lib/needsYou";
 import { keymapVersion, subscribeKeymap } from "../../lib/keymap";
@@ -227,6 +228,16 @@ export function Sidebar({ onOpenChat }: Props) {
     retry: false,
   });
   const closedCount = Array.isArray(closed) ? closed.length : 0;
+  // "★ Favorites" beside it (lib/favorites): every starred session, open or
+  // closed — a closed one is not in the rail, so the rows can't count it.
+  const { data: favs } = useQuery({
+    queryKey: FAVORITES_KEY,
+    queryFn: () => api<unknown[]>("/api/favorites"),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const favCount = Array.isArray(favs) ? favs.length : 0;
   // Closing a session is what adds an entry — don't make the link wait a
   // minute to appear. No bus (SSR, a test) just means the poll does it.
   useEffect(() => {
@@ -234,6 +245,7 @@ export function Sidebar({ onOpenChat }: Props) {
     if (!ev) return;
     return ev.subscribe("session.deleted", () => {
       void qc.invalidateQueries({ queryKey: ["recently-closed"] });
+      void qc.invalidateQueries({ queryKey: FAVORITES_KEY });
     });
   }, [qc]);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -793,16 +805,31 @@ export function Sidebar({ onOpenChat }: Props) {
               </ul>
               {/* A button, never an <li>: everything inside #instance-list is
                   a rail row, and the rail's SSR tests split on '<li class="'. */}
-              {closedCount > 0 && (
-                <button
-                  type="button"
-                  id="recent-btn"
-                  className="foot-link recent-link"
-                  title="Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)"
-                  onClick={() => ui.openDialogFor("recent")}
-                >
-                  Recently closed
-                </button>
+              {(closedCount > 0 || favCount > 0) && (
+                <div className="rail-foot-links">
+                  {favCount > 0 && (
+                    <button
+                      type="button"
+                      id="favorites-btn"
+                      className="foot-link recent-link fav-link"
+                      title="Sessions you starred to come back to: open one, or reopen a closed one as it was"
+                      onClick={() => ui.openDialogFor("favorites")}
+                    >
+                      ★ Favorites
+                    </button>
+                  )}
+                  {closedCount > 0 && (
+                    <button
+                      type="button"
+                      id="recent-btn"
+                      className="foot-link recent-link"
+                      title="Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)"
+                      onClick={() => ui.openDialogFor("recent")}
+                    >
+                      Recently closed
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );

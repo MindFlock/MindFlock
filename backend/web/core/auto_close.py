@@ -134,6 +134,7 @@ R_IN_PLACE = "in place"
 R_PEER = "peer-shared"
 R_HIDDEN = "a feature's helper session"
 R_KEEP_OPEN = "kept open"
+R_FAVORITE = "a favorite"
 R_TEAM = "in a team run"
 R_ROUTE = "on a running route"
 R_STATUS = "not running"
@@ -471,6 +472,17 @@ def _prune(live: Iterable[str], tombstoned: Mapping[str, float]) -> None:
         pass
 
 
+def _favorite(title: str) -> bool:
+    """Starred by the person (core.favorites): theirs on purpose, never
+    closed by the sweep. Unknown reads as not."""
+    try:
+        from backend.web.core import favorites as _favorites
+
+        return _favorites.is_favorite(title)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _remote_started(inst) -> bool:
     """An agent on another device started it (core.remote_origin)."""
     try:
@@ -760,6 +772,8 @@ def judge(
     kept = store.get("keep_open", {}).get(title)
     if kept is not None and _same(_num(kept.get("created_at")), created):
         return KEEP, R_KEEP_OPEN, None
+    if _favorite(title):
+        return KEEP, R_FAVORITE, None
     adrift = orphan is not None and not parent  # flagged unless it closes
 
     def _stay(why: str) -> Tuple[str, str, Optional[float]]:

@@ -474,6 +474,9 @@ export interface Instance {
    * set on an agent-spawned session (and a worker orphaned by its parent),
    * null on any other. Optional: an older server doesn't send it. */
   auto_close?: AutoCloseInfo | null;
+  /** Starred by the person (core.favorites): listed under Favorites and
+   * never closed by the auto-close sweep. Optional: an older server. */
+  favorite?: boolean;
   /** Started from another of your devices (core.remote_origin): who started
    * it there. Null otherwise; optional: an older server doesn't send it. */
   origin?: OriginInfo | null;

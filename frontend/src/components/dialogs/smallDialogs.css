@@ -548,6 +548,76 @@
   gap: 12px;
 }
 
+/* Favorites (FavoritesDialog): the sessions you starred, open or closed. */
+#favorites-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 620px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-head #favorites-total {
+  flex: 1;
+  font-size: 12px;
+}
+
+#favorites-panel .favorites-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#favorites-panel .fav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+#favorites-panel .fav-star {
+  color: var(--accent);
+}
+
+#favorites-panel .fav-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#favorites-panel .fav-state {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#favorites-panel .fav-gone .fav-name {
+  opacity: 0.6;
+}
+
+#favorites-panel .fav-acts {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
 .ws-head #recent-total {
   flex: 1;
   font-size: 12px;

@@ -9948,6 +9948,54 @@ async def post_keep_open(title: str, request: Request) -> JSONResponse:
     return JSONResponse({"title": title, "keep_open": state})
 
 
+@app.get("/api/favorites")
+def get_favorites() -> JSONResponse:
+    """The sidebar's Favorites (core.favorites): every starred session,
+    first starred first — ``[{"title", "at", "state": open|closed|gone,
+    "entry_id", "branch", "folder", "closed_at", "wiped"}]``. A closed one
+    reopens through ``POST /api/recently-closed/<entry_id>/reopen``."""
+    from backend.web.core import favorites as _favorites
+
+    with ENGINE.lock:
+        live = {
+            t: {
+                "branch": getattr(i, "Branch", "") or "",
+                "folder": getattr(i, "Path", "") or "",
+            }
+            for t, i in ENGINE.instances.items()
+        }
+    return JSONResponse(_favorites.listing(live, _load_recently_closed()))
+
+
+@app.post("/api/favorites")
+async def post_favorite(request: Request) -> JSONResponse:
+    """Star or unstar a session: body ``{"title", "on": bool}`` (default
+    true). A closed or gone title can be unstarred too; starring needs a
+    session that is open or in Recently closed. → ``{"title", "favorite"}``;
+    **400** without a title, **404** for one MindFlock has never seen."""
+    from backend.web.core import favorites as _favorites
+
+    body = await _body_dict(request)
+    title = str(body.get("title") or "").strip()
+    if not title:
+        return JSONResponse({"error": "title required"}, status_code=400)
+    on = body.get("on", True) is not False
+    if on and title not in ENGINE.instances:
+        known = any(
+            isinstance(e, dict) and e.get("title") == title
+            for e in _load_recently_closed()
+        )
+        if not known:
+            return JSONResponse({"error": "no session %r" % title}, status_code=404)
+    try:
+        state = await asyncio.to_thread(_favorites.set_favorite, title, on)
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse({"error": "not saved: %s" % err}, status_code=500)
+    if title in ENGINE.instances:
+        _republish_session(title)
+    return JSONResponse({"title": title, "favorite": state})
+
+
 @app.post("/api/auto-close/undo")
 async def post_auto_close_undo(request: Request) -> JSONResponse:
     """The "Closed N finished workers" toast's Undo: reopen each Recently
