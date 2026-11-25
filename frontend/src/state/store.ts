@@ -154,6 +154,8 @@ export type DialogName =
   | "move"
   // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
+  // Favorites (FavoritesDialog): the starred sessions, open or closed.
+  | "favorites"
   // Customize → Prompts: the saved-prompt library.
   | "prompts"
   | "setup"

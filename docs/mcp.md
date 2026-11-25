@@ -2693,7 +2693,7 @@ a manual ✕, never deleted — when all of these hold:
 
 1. **It is a sub-session.** `spawned: true` and under a live parent (or
    orphaned by one, below). Never a session the person started (one an agent
-   adopted with `set_parent` stays theirs), an intake session (`pr-…`,
+   adopted with `set_parent` stays theirs), a favorite (★, `core/favorites.py`), an intake session (`pr-…`,
    `issue-…`, a ticket branch), an in-place or peer-shared session, a feature's
    hidden helper (a Verify run), a member of a running team run, a session on
    a running route of its own, a worker a stop of its parent's running route

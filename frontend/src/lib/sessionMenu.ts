@@ -54,6 +54,7 @@ import { errMsg } from "./format";
 import { toast } from "./toast";
 import { showInSky } from "./viewMode";
 import { isAutoClosable, setKeepOpen } from "./autoClose";
+import { favoriteMenuLabel, setFavorite } from "./favorites";
 
 export interface MenuItem {
   /** Stable id (data-menu): tests and the pane/row tell items apart by it. */
@@ -318,6 +319,19 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
         : "This worker closes by itself once it has finished and its work is merged. Keep it open instead",
       run: () => setKeepOpen(title, !inst.auto_close?.keep_open),
     },
+    // Favorites (lib/favorites): a session you keep coming back to — listed
+    // under the sidebar's ★ Favorites open or closed, never closed by itself.
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "favorite",
+        label: favoriteMenuLabel(inst),
+        checked: !!inst.favorite,
+        title: inst.favorite
+          ? "In Favorites. Click to remove it (the session itself is not touched)"
+          : "Keep coming back to this session: list it under ★ Favorites, open or closed, and never close it by itself",
+        run: () => void setFavorite(title, !inst.favorite),
+      },
   ]);
 
   const group = remote ? null : detachableGroup(inst);

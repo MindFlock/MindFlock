@@ -43,6 +43,7 @@ import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { MoveSessionDialog } from "./components/dialogs/MoveSessionDialog";
 import { GuestNameDialog } from "./components/dialogs/GuestNameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
+import { FavoritesDialog } from "./components/dialogs/FavoritesDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { ConnectGitHubDialog } from "./components/dialogs/ConnectGitHub";
 import { TodoReminder } from "./components/dialogs/TodoReminder";
@@ -346,6 +347,7 @@ export default function App() {
       <MoveSessionDialog />
       <GuestNameDialog />
       <RecentDialog />
+      <FavoritesDialog />
       <SetupDialog />
       <ConnectGitHubDialog />
       {/* A timed todo whose time has come: pops up by itself (lib/todoTime). */}
