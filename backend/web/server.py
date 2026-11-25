@@ -1061,6 +1061,14 @@ async def lifespan(app: FastAPI):
         # Turn ends of sessions an agent on another device started here go
         # back to that session's inbox there (core.remote_origin).
         _register_task(_remote_origin.run_loop())
+    # One model spent while the plan has room ("your Fable limit resets …"):
+    # step the session down a model and carry on (core.model_downshift).
+    # Off under pytest — ENGINE is the developer's real state, and this
+    # TYPES into agents.
+    if _model_downshift_loop_enabled():
+        from backend.web.core import model_downshift as _model_downshift
+
+        _register_task(_model_downshift.run_loop())
     _register_task(_memory_watch_loop())
     # Per-session memory sampler + logs/memory.jsonl (core.memory_watch), on
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
@@ -3164,6 +3172,19 @@ def _sleep_loop_enabled() -> bool:
 #: None = automatic: on in a real server, OFF under pytest (the auto-close
 #: sweep closes sessions in ENGINE, the developer's real state).
 _AUTO_CLOSE_LOOP_ENABLED: Optional[bool] = None
+
+#: None = automatic: on in a real server, OFF under pytest (the model
+#: downshift sweep TYPES into agents in ENGINE, the developer's real state).
+_MODEL_DOWNSHIFT_LOOP_ENABLED: Optional[bool] = None
+
+
+def _model_downshift_loop_enabled() -> bool:
+    if _MODEL_DOWNSHIFT_LOOP_ENABLED is not None:
+        return bool(_MODEL_DOWNSHIFT_LOOP_ENABLED)
+    # MINDFLOCK_MODEL_DOWNSHIFT=0 forces it OFF at boot (sandboxed servers).
+    if os.environ.get("MINDFLOCK_MODEL_DOWNSHIFT", "1") == "0":
+        return False
+    return not _restart._under_pytest()
 
 
 def _auto_close_loop_enabled() -> bool:

@@ -275,6 +275,45 @@ class ClaudeProvider(BaseProvider):
         # Claude is one of the default CLIs the cost panel always shows.
         return True
 
+    #: Claude's model families, best first, as its per-model limit notices
+    #: name them ("your Fable limit resets …").
+    MODEL_LADDER = ("fable", "opus", "sonnet", "haiku")
+
+    def model_ladder(self):
+        """One family spent while the plan has room ("You've hit your
+        individual spend limit · … · your Fable limit resets Nov 30"): the
+        session steps down this ladder (core.model_downshift)."""
+        return self.MODEL_LADDER
+
+    def model_switch_command(self, model: str) -> Optional[str]:
+        """``/model opus``: Claude Code switches in place, keeping the
+        conversation; the alias picks that family's newest model."""
+        m = str(model or "").strip().lower()
+        return "/model " + m if m in self.MODEL_LADDER else None
+
+    def model_default_file(self, inst=None) -> Optional[str]:
+        """``<config dir>/settings.json``: Claude Code's ``/model opus`` also
+        SAVES the model there as the default for every new session ("Set
+        model to Opus 5.5 and saved as your default for new sessions"). The
+        downshift puts the person's own default back. The config dir is the
+        session's account profile's, else ``$CLAUDE_CONFIG_DIR``, else
+        ``~/.claude``."""
+        root = ""
+        try:
+            from . import auth_profiles as _ap
+
+            pid = _ap.effective_profile_id(getattr(inst, "ProfileId", "") or "")
+            prof = _ap.get_profile(pid) if pid else None
+            if prof is not None and prof.kind == "account":
+                root = _ap.account_dir(prof)
+        except Exception:  # noqa: BLE001
+            root = ""
+        if not root:
+            root = os.environ.get(
+                "CLAUDE_CONFIG_DIR", ""
+            ).strip() or os.path.expanduser("~/.claude")
+        return os.path.join(root, "settings.json")
+
     # --- connection: install + login -------------------------------------- #
     def install_hint(self) -> str:
         """Anthropic's native installer, always — never npm.

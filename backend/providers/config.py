@@ -185,6 +185,13 @@ class ProviderConfig:
     #: newest notice on the pane wins). Empty = use
     #: :data:`usage_limits.CREDITS_OPEN_PATTERNS`.
     usage_credits_patterns: Tuple[str, ...] = ()
+    #: The CLI's models, best first, as its per-model limit notices name them
+    #: (``[usage] model_ladder``): one spent while the plan has room, the
+    #: session steps to the next (core.model_downshift). Empty = never.
+    usage_model_ladder: Tuple[str, ...] = ()
+    #: What to type to switch models in place, ``{model}`` replaced
+    #: (``[usage] model_switch``, e.g. ``"/model {model}"``). Empty = can't.
+    usage_model_switch: str = ""
     #: Whether this provider appears in the sidebar's overall cost/usage panel
     #: by default. Only the bundled default CLIs (codex/antigravity/aider —
     #: plus Claude, which opts in on its own provider class) set this; user
@@ -1151,6 +1158,10 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         usage_window_note=usage.get("note", ""),
         usage_limit_patterns=tuple(usage.get("limit_patterns", ()) or ()),
         usage_credits_patterns=tuple(usage.get("credits_patterns", ()) or ()),
+        usage_model_ladder=tuple(
+            str(m) for m in (usage.get("model_ladder", ()) or ()) if str(m).strip()
+        ),
+        usage_model_switch=str(usage.get("model_switch", "") or ""),
         usage_visible=bool(usage.get("visible", False)),
         # [activity] hooks_file + [[activity.events]] (event, state) — opt-in
         # marker-hook integration for a user CLI that has its own hooks engine.

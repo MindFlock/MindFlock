@@ -71,6 +71,7 @@ import { allowPath } from "../lib/codemapApi";
 import { allowableBlock, baseName, redZoneEventFocus, type RedZoneEventData } from "../lib/mapEntry";
 import { errMsg } from "../lib/format";
 import { AUTO_CLOSED_EVENT, autoClosedToast, type AutoClosedData } from "../lib/autoClose";
+import { MODEL_DOWNSHIFT_EVENT, modelDownshiftToast, type ModelDownshiftData } from "../lib/modelDownshift";
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
@@ -733,6 +734,14 @@ export function EventToasts() {
         if (isReplay(env)) return;
         autoClosedToast((env.data || {}) as AutoClosedData);
         refreshInstances();
+      })
+    );
+    unsubs.push(
+      // One model ran out while the plan has room (backend
+      // core/model_downshift): the session was switched down a model.
+      ev.subscribe(MODEL_DOWNSHIFT_EVENT, (env) => {
+        if (isReplay(env)) return;
+        modelDownshiftToast((env.data || {}) as ModelDownshiftData, env.session);
       })
     );
     unsubs.push(

@@ -63937,9 +63937,9 @@ function whyLine(it) {
 		if (it.merged) return "Merged into " + (it.merged_into || "the base branch") + "; nothing uncommitted.";
 		return "Every commit is on a remote; nothing uncommitted. Its branch is kept.";
 	}
-	return it.kept.length ? cap$1(it.kept.join("; ")) + "." : "";
+	return it.kept.length ? cap$2(it.kept.join("; ")) + "." : "";
 }
-function cap$1(s) {
+function cap$2(s) {
 	return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 function needsConfirm(it) {
@@ -64324,6 +64324,28 @@ async function setKeepOpen(title, keep) {
 	} finally {
 		refreshInstances();
 	}
+}
+//#endregion
+//#region src/lib/modelDownshift.ts
+var MODEL_DOWNSHIFT_EVENT = "session.model_downshifted";
+var cap$1 = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+function resetWhen(at) {
+	if (!at || !isFinite(at)) return "";
+	const d = /* @__PURE__ */ new Date(at * 1e3);
+	const month = d.toLocaleString("en-US", { month: "short" });
+	const h = d.getHours() % 12 || 12;
+	const m = d.getMinutes();
+	return month + " " + d.getDate() + " at " + h + (m ? ":" + String(m).padStart(2, "0") : "") + (d.getHours() < 12 ? "am" : "pm");
+}
+function modelDownshiftText(d, session, nameOf = displayName) {
+	const back = resetWhen(d.reset_at);
+	return "“" + nameOf(session || "") + "” switched from " + cap$1(d.from) + " to " + cap$1(d.to) + ": " + cap$1(d.from) + " is used up" + (back ? " until " + back : "");
+}
+function modelDownshiftToast(d, session) {
+	toast(modelDownshiftText(d, session), {
+		title: "Its model ran out while your plan still has room, so MindFlock switched it to the next model and told it to carry on. Turn this off in Settings → Agent orchestration.",
+		duration: 9e3
+	});
 }
 //#endregion
 //#region src/components/EventToasts.tsx
@@ -64766,6 +64788,10 @@ function EventToasts() {
 			if (isReplay(env)) return;
 			autoClosedToast(env.data || {});
 			refreshInstances();
+		}));
+		unsubs.push(ev.subscribe(MODEL_DOWNSHIFT_EVENT, (env) => {
+			if (isReplay(env)) return;
+			modelDownshiftToast(env.data || {}, env.session);
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
@@ -135837,6 +135863,7 @@ function AgentOrchestration(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoCloseRows, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModelDownshiftRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Spawn limits"
@@ -135962,6 +135989,34 @@ function WorkersRows() {
 }
 var AUTO_CLOSE_LABEL = "Close finished sub-sessions automatically";
 var AUTO_CLOSE_NOTE = "A worker an agent started closes by itself once it has reported done, sits idle, and its work is merged. It stays in Recently closed.";
+var MODEL_DOWNSHIFT_LABEL = "Switch to the next model when one runs out";
+function ModelDownshiftRow() {
+	const s = useSettings();
+	const stored = s.get("general", "model_downshift");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "orch-model-downshift",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: MODEL_DOWNSHIFT_LABEL
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "When a session runs out of one model while your plan still has room (Claude: “your Fable limit resets…”), MindFlock switches it to the next one down (Fable → Opus → Sonnet → Haiku) and tells it to carry on, so the work doesn't stop."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				"data-group": "general",
+				"data-field": "model_downshift",
+				checked: stored !== false && stored !== "false" && stored !== "0",
+				onChange: (e) => void s.saveField("general", "model_downshift", e.target.checked)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
 function AutoCloseRows() {
 	const s = useSettings();
 	const stored = s.get("general", "auto_close_children");
