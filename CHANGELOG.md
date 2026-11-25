@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Finished workers that were put to sleep close too.** A worker whose
+  agent had been put to sleep to save memory has no terminal session left,
+  and asking tmux who was attached to it got an error that MindFlock read as
+  "someone might be": every such worker stayed open as "open in a terminal"
+  forever, even with nobody looking. tmux saying the session (or its server)
+  does not exist now counts as nobody attached; any other error still holds
+  it.
+
 ## [0.14.32] - 2026-11-25
 
 ### Added
