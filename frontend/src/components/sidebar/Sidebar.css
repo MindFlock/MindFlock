@@ -288,6 +288,19 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   text-align: left;
 }
 
+/* "★ Favorites" and "Recently closed" share one line under the list. */
+#sidebar .rail-foot-links {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 2px 0 8px 20px;
+}
+
+#sidebar .rail-foot-links .recent-link {
+  margin: 0;
+}
+
 #sidebar .recent-link:hover,
 #sidebar .recent-link:focus-visible {
   color: var(--text);
@@ -558,4 +571,10 @@ body.narrow .sidebar-resizer {
   #view-modes .vm-nums ~ .vt-pair .vt-word {
     display: none;
   }
+}
+
+/* A favorite's star before its name (lib/favorites). */
+#sidebar .fav-mark {
+  color: var(--accent);
+  font-size: 10px;
 }

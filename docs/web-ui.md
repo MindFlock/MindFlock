@@ -800,8 +800,9 @@ under To-do — or under the Assistant when To-do is off; see
 session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, and one bar per extension. Under the
-list, a **Recently closed** link shows once anything is closed (see
-[Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
+list, a **★ Favorites** link shows once you have starred a session (see
+[Favorites](#favorites)) and a **Recently closed** link once anything is
+closed (see [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
 count, **⚙ Customize** (see [Customize](#customize)) and **? Help** — a menu,
 opening upward, of **Ask how something works…** (see [Ask how something
@@ -4710,6 +4711,24 @@ Under the base field one line says what the PR could break — **⚠ Could break
 direct importers of the changes, from `lib/mapDigest`; See on map opens the
 ⚠ Could break layer). It stays hidden while loading and when nothing imports
 the changes.
+
+## Favorites
+
+For the sessions you keep coming back to. A session's ⋯ menu → **☆ Add to
+favorites** stars it (★ before its name in the rail; the same item, now
+**★ In favorites**, unstars it). The **★ Favorites** link under the session
+list, beside Recently closed, opens the list of every favorite, open ones
+first:
+
+- **open**: **Open** jumps to it;
+- **closed**: **Reopen** brings it back from its Recently closed entry with
+  the same folder, branch and conversation (as Recently closed's Reopen);
+- **deleted / not found**: its folder was deleted with it, or its Recently
+  closed entry was cleared; only **Unstar** is left.
+
+A favorite is yours on purpose, so the auto-close sweep never closes it
+([mcp.md](mcp.md#finished-workers-close-themselves)), and a rename keeps its
+star. Stored per machine in `~/.mindflock/favorites.json` (`core/favorites.py`).
 
 ## Recently closed
 

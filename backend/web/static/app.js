@@ -66700,6 +66700,47 @@ function MemoryWaitBar() {
 	});
 }
 //#endregion
+//#region src/lib/favorites.ts
+var FAVORITES_KEY = ["favorites"];
+function refreshFavorites() {
+	return queryClient.invalidateQueries({ queryKey: FAVORITES_KEY });
+}
+async function setFavorite(title, on) {
+	try {
+		const r = await api("/api/favorites", {
+			method: "POST",
+			json: {
+				title,
+				on
+			}
+		});
+		toast((r.favorite ? "Added “" : "Removed “") + displayName(title) + (r.favorite ? "” to Favorites" : "” from Favorites"));
+		return !!r.favorite;
+	} catch (err) {
+		errorPop(on ? "Couldn't add to Favorites" : "Couldn't remove from Favorites", errMsg(err));
+		return !on;
+	} finally {
+		refreshFavorites();
+		refreshInstances();
+	}
+}
+function favoriteMenuLabel(inst) {
+	return inst?.favorite ? "★ In favorites" : "☆ Add to favorites";
+}
+function favoriteStateText(r) {
+	if (r.state === "open") return "open";
+	if (r.state === "closed") return "closed";
+	return r.wiped ? "deleted" : "not found";
+}
+function sortFavorites(rows, nameOf = displayName) {
+	const rank = {
+		open: 0,
+		closed: 1,
+		gone: 2
+	};
+	return [...rows].sort((a, b) => rank[a.state] - rank[b.state] || nameOf(a.title).localeCompare(nameOf(b.title)));
+}
+//#endregion
 //#region src/lib/devices.ts
 function devicePath(device, path) {
 	return device ? `/api/devices/${encodeURIComponent(device)}/fwd${path}` : path;
@@ -69337,6 +69378,13 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			note: inst.auto_close?.keep_open ? "won't close by itself" : void 0,
 			title: inst.auto_close?.keep_open ? "On: this worker stays open when it is finished. Click to let it close by itself again" : "This worker closes by itself once it has finished and its work is merged. Keep it open instead",
 			run: () => setKeepOpen(title, !inst.auto_close?.keep_open)
+		},
+		!remote && !peer && !inst.pending && {
+			key: "favorite",
+			label: favoriteMenuLabel(inst),
+			checked: !!inst.favorite,
+			title: inst.favorite ? "In Favorites. Click to remove it (the session itself is not touched)" : "Keep coming back to this session: list it under ★ Favorites, open or closed, and never close it by itself",
+			run: () => void setFavorite(title, !inst.favorite)
 		}
 	]);
 	const group = remote ? null : detachableGroup(inst);
@@ -71190,7 +71238,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 										backToRow();
 									}
 								}
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "title",
 								onDoubleClick: (e) => {
 									if (picking || pending) return;
@@ -71206,7 +71254,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 									!picking && !pending ? "Double-click to rename (F2)" : "",
 									picking ? "" : "Ctrl+click or Shift+click to select several"
 								].filter(Boolean).join("\n"),
-								children: /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown
+								children: [inst.favorite && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "fav-mark",
+									title: "In Favorites",
+									"aria-label": "Favorite",
+									children: ["★", " "]
+								}), /(-\d+|\(\d+\))$/.test(shown) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: shown }) : shown]
 							}),
 							editing && renameTaken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "lineage rename-taken",
@@ -76032,11 +76085,20 @@ function Sidebar({ onOpenChat }) {
 		retry: false
 	});
 	const closedCount = Array.isArray(closed) ? closed.length : 0;
+	const { data: favs } = useQuery({
+		queryKey: FAVORITES_KEY,
+		queryFn: () => api("/api/favorites"),
+		staleTime: 3e4,
+		refetchInterval: 6e4,
+		retry: false
+	});
+	const favCount = Array.isArray(favs) ? favs.length : 0;
 	(0, import_react.useEffect)(() => {
 		const ev = window.mindflock?.events;
 		if (!ev) return;
 		return ev.subscribe("session.deleted", () => {
 			qc.invalidateQueries({ queryKey: ["recently-closed"] });
+			qc.invalidateQueries({ queryKey: FAVORITES_KEY });
 		});
 	}, [qc]);
 	const [dragging, setDragging] = (0, import_react.useState)(null);
@@ -76415,13 +76477,23 @@ function Sidebar({ onOpenChat }) {
 								]
 							})]
 						}),
-						closedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "recent-btn",
-							className: "foot-link recent-link",
-							title: "Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)",
-							onClick: () => ui.openDialogFor("recent"),
-							children: "Recently closed"
+						(closedCount > 0 || favCount > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rail-foot-links",
+							children: [favCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "favorites-btn",
+								className: "foot-link recent-link fav-link",
+								title: "Sessions you starred to come back to: open one, or reopen a closed one as it was",
+								onClick: () => ui.openDialogFor("favorites"),
+								children: "★ Favorites"
+							}), closedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "recent-btn",
+								className: "foot-link recent-link",
+								title: "Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)",
+								onClick: () => ui.openDialogFor("recent"),
+								children: "Recently closed"
+							})]
 						})
 					]
 				}, SESSIONS_KEY);
@@ -147521,6 +147593,136 @@ function RecentDialog() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/FavoritesDialog.tsx
+function FavoritesDialog() {
+	const open = useUi((s) => s.openDialog === "favorites");
+	const closeDialog = useUi((s) => s.closeDialog);
+	const { data, error, isLoading } = useQuery({
+		queryKey: FAVORITES_KEY,
+		queryFn: () => api("/api/favorites"),
+		enabled: open,
+		staleTime: 5e3,
+		retry: false
+	});
+	if (!open) return null;
+	const rows = sortFavorites(Array.isArray(data) ? data : []);
+	const go = (title) => {
+		closeDialog();
+		selectSession(title);
+	};
+	const reopen = async (r) => {
+		try {
+			const inst = await api(`/api/recently-closed/${encodeURIComponent(r.entry_id || "")}/reopen`, { method: "POST" });
+			closeDialog();
+			await refreshInstances();
+			refreshRecentlyClosed();
+			refreshFavorites();
+			if (inst?.title) selectSession(inst.title);
+			toast("Reopened " + displayName(inst?.title || r.title));
+		} catch (err) {
+			errorPop("Reopen failed", err.message);
+			refreshFavorites();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "favorites-dialog",
+		onClose: closeDialog,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "favorites-panel",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Favorites" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							id: "favorites-total",
+							children: [
+								rows.length,
+								" session",
+								rows.length === 1 ? "" : "s"
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "favorites-close",
+							onClick: closeDialog,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					style: { margin: 0 },
+					children: "Sessions you come back to. Star one from its ⋯ menu. A closed favorite reopens with the same folder, branch and conversation, and a favorite never closes by itself."
+				}),
+				isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted",
+					children: "Loading…"
+				}),
+				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error",
+					children: error.message
+				}),
+				!isLoading && !error && !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted",
+					id: "favorites-empty",
+					children: "No favorites yet. Open a session's ⋯ menu and choose “Add to favorites”."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					id: "favorites-list",
+					className: "favorites-list",
+					children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "fav-row fav-" + r.state,
+						"data-title": r.title,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fav-star",
+								"aria-hidden": "true",
+								children: "★"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fav-name",
+								title: r.folder || r.title,
+								children: displayName(r.title)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "fav-state muted",
+								children: [favoriteStateText(r), r.branch ? " · " + r.branch : ""]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "fav-acts",
+								children: [
+									r.state === "open" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fav-open",
+										onClick: () => go(r.title),
+										children: "Open"
+									}),
+									r.state === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fav-reopen",
+										title: "Reopen it with the same folder, branch and conversation",
+										onClick: () => void reopen(r),
+										children: "Reopen"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fav-unstar",
+										title: "Remove from Favorites (the session itself is not touched)",
+										onClick: () => void setFavorite(r.title, false),
+										children: "Unstar"
+									})
+								]
+							})
+						]
+					}, r.title))
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/dialogs/ConnectGitHub.tsx
 function pushTargetLine(t) {
 	if (!t?.name) return "Checks your project's repo once a session has opened one — no token needed.";
@@ -164749,6 +164951,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MoveSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestNameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FavoritesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHubDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoReminder, {}),

@@ -765,6 +765,12 @@ export const SidebarRow = memo(function SidebarRow({
                 {/* Truncated at the END (round 5, m13: chips squeezed
                     "fix-typo-readme" to "fi…eadme"); middle-truncated only
                     when a "-2" / "(3)" suffix is what tells two rows apart. */}
+                {/* Starred (lib/favorites): listed under ★ Favorites. */}
+                {inst.favorite && (
+                  <span className="fav-mark" title="In Favorites" aria-label="Favorite">
+                    ★{" "}
+                  </span>
+                )}
                 {/(-\d+|\(\d+\))$/.test(shown) ? <MidName text={shown} /> : shown}
               </span>
             )}

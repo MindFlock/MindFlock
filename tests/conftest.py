@@ -198,6 +198,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_AUTO_CLOSE_FILE", str(tmp_path / "mindflock" / "auto_close.json")
     )
+    # Favorite sessions (``~/.mindflock/favorites.json``, core.favorites):
+    # every row reads them.
+    monkeypatch.setenv(
+        "MINDFLOCK_FAVORITES_FILE", str(tmp_path / "mindflock" / "favorites.json")
+    )
     # Where sessions another device started came from (``~/.mindflock/
     # remote_origin.json``, core.remote_origin): every row reads it.
     monkeypatch.setenv(

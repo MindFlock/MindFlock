@@ -584,6 +584,8 @@ def judge(srv, inst, title: str, row, now: float, grace_s: float):
     created = _created(inst)
     if ac.keep_open(title, created):
         return ac.KEEP, ac.R_KEEP_OPEN, None
+    if ac._favorite(title):
+        return ac.KEEP, ac.R_FAVORITE, None
     try:
         from backend import session as _session
 

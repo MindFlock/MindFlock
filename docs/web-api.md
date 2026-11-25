@@ -71,6 +71,7 @@ List all sessions. Each item:
   "workspace_missing": false,  // L1(c): started but its directory vanished
   "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual"|"shutdown", "freed_mb", "mid_turn"?}: agent asleep ("shutdown": found down at boot, no crash — only a person wakes it; mid_turn: its wake queues a continue)
   "auto_close": null,          // an agent-spawned worker: {"keep_open", "orphan_of", "closes_at", "why"} —
+  "favorite": false,           // starred (core.favorites): listed under ★ Favorites, never auto-closed
                                // finished workers close themselves (mcp.md#finished-workers-close-themselves);
                                // orphan_of names a closed parent ("parent closed — review or close")
   // "held_offline": true, "held_since": 1762300000.0, "held_reason": "the server restarted"
@@ -716,6 +717,8 @@ Errors carry one human sentence and leave the form untouched:
 | Method | Path | Effect |
 |---|---|---|
 | DELETE | `/api/instances/{title}` | Kill session, remove worktree + branch → `{ok, title, wiped: true, children}`. **409** `{error: "folder in use", sessions: [titles]}` — and nothing changes — while another live session (a copy from Duplicate session) works in the same folder (real paths compared). Recorded in Recently closed like `/close` (listed with its folder gone). `children`: its child sessions, which keep running under *its* parent (or as roots) |
+| GET | `/api/favorites` | The sidebar's **★ Favorites** (`core/favorites.py`): every starred session, first starred first → `[{title, at, state: open\|closed\|gone, entry_id, branch, folder, closed_at, wiped}]`. A closed one reopens with `POST /api/recently-closed/{entry_id}/reopen` |
+| POST | `/api/favorites` | Star or unstar a session: `{title, on: bool}` (default true) → `{title, favorite}`. Starring needs a session that is open or in Recently closed (**404** otherwise); unstarring takes any title. **400** without a title. Rows carry `favorite: bool` |
 | POST | `/api/instances/{title}/keep-open` | The ⋯ menu's **Keep open** ([mcp.md](mcp.md#finished-workers-close-themselves)): `{keep: bool}` (default true) — the auto-close sweep leaves this finished worker open → `{title, keep_open}`. **404** unknown |
 | POST | `/api/auto-close/undo` | The "Closed N finished workers" toast's Undo: `{ids: [...]}` (the `system.subsessions_closed` event's `entries[].id`, Recently closed entry ids) — reopens each and marks it Keep open → `{reopened: [titles], failed: {id: error}}`. **400** without ids |
 | POST | `/api/instances/{title}/close` | End tmux, **keep** worktree; recorded in recently-closed → `{ok, title, wiped: false, children}`. Never refused for a shared folder (keeping it endangers nobody) |

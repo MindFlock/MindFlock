@@ -570,6 +570,9 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # "orphan_of", "closes_at", "why"} for an agent-spawned session, null
         # for any other. Dict reads only.
         "auto_close": _auto_close_row(inst),
+        # Starred by the person (core.favorites): listed under Favorites,
+        # never closed by the auto-close sweep. A cached file read.
+        "favorite": _favorite_row(inst),
         # Who started it, when another of your devices did (core.
         # remote_origin): {"device", "device_name", "verified", "session",
         # "by": agent|person, "label"} — "from tripwire-send on
@@ -666,6 +669,16 @@ def _origin_row(inst):
         return remote_origin.row_field(inst)
     except Exception:  # noqa: BLE001 — enrichment only
         return None
+
+
+def _favorite_row(inst) -> bool:
+    """``favorites.is_favorite(title)``, never raising into the row build."""
+    try:
+        from backend.web.core import favorites
+
+        return favorites.is_favorite(inst.Title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return False
 
 
 def _auto_close_row(inst):
