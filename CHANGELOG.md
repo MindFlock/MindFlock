@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.33] - 2026-11-25
+
+### Fixed
+
+- **Finished workers that were put to sleep close too.** A worker whose
+  agent had been put to sleep to save memory has no terminal session left,
+  and asking tmux who was attached to it got an error that MindFlock read as
+  "someone might be": every such worker stayed open as "open in a terminal"
+  forever, even with nobody looking. tmux saying the session (or its server)
+  does not exist now counts as nobody attached; any other error still holds
+  it.
+
 ## [0.14.32] - 2026-11-25
 
 ### Added
@@ -7711,7 +7723,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.32...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.33...HEAD
+[0.14.33]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.33
 [0.14.32]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.32
 [0.14.31]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.31
 [0.14.30]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.30
