@@ -41,6 +41,7 @@ export function AgentOrchestration(_: ScreenProps) {
       </p>
       <WorkersRows />
       <AutoCloseRows />
+      <ModelDownshiftRow />
       <h3 className="set-section-title">Spawn limits</h3>
       <p className="set-hint orch-intro">
         Guard-rails on how far one orchestrator can fan out. A change applies to
@@ -140,6 +141,40 @@ function WorkersRows() {
 export const AUTO_CLOSE_LABEL = "Close finished sub-sessions automatically";
 export const AUTO_CLOSE_NOTE =
   "A worker an agent started closes by itself once it has reported done, sits idle, and its work is merged. It stays in Recently closed.";
+
+export const MODEL_DOWNSHIFT_LABEL = "Switch to the next model when one runs out";
+
+/** One model spent while the plan has room (backend core/model_downshift.py):
+ * ON by default (unset reads as on, `general.model_downshift`). A session
+ * whose newest notice is "your Fable limit resets Nov 30" is switched to the
+ * next model down (`/model opus`) and told to carry on. */
+function ModelDownshiftRow() {
+  const s = useSettings();
+  const stored = s.get("general", "model_downshift");
+  const on = stored !== false && stored !== "false" && stored !== "0";
+  return (
+    <div className="set-row set-switch-row" id="orch-model-downshift">
+      <span className="notif-rule-text">
+        <span className="set-label">{MODEL_DOWNSHIFT_LABEL}</span>
+        <span className="set-hint notif-rule-desc">
+          When a session runs out of one model while your plan still has room (Claude: “your Fable limit
+          resets…”), MindFlock switches it to the next one down (Fable → Opus → Sonnet → Haiku) and tells it to
+          carry on, so the work doesn't stop.
+        </span>
+      </span>
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          data-group="general"
+          data-field="model_downshift"
+          checked={on}
+          onChange={(e) => void s.saveField("general", "model_downshift", e.target.checked)}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
 
 /** Finished workers close themselves (backend core/auto_close.py): ON by
  * default (unset reads as on, `general.auto_close_children`), after

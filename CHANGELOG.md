@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A session that runs out of one model switches to the next and carries
+  on.** A plan can run out of one model while it still has room overall:
+  Claude Code then answers every prompt with "You've hit your individual
+  spend limit · … · your Fable limit resets Nov 30", and the session's
+  queue, route and orchestrator all stop there until that date. MindFlock
+  now spots that notice (the newest thing on the screen, naming a model),
+  types `/model opus` (the next model down: Fable → Opus → Sonnet → Haiku),
+  tells the agent to carry on with the request that bounced, and shows a
+  toast: *“api” switched from Fable to Opus: Fable is used up until Nov 30
+  at 11pm*. An account-wide limit (no model named) is still waited out as
+  before. Claude Code saves a `/model` choice as your default for new
+  sessions; MindFlock puts your own default back, so new sessions still
+  start on your usual model. Settings → Agent orchestration → *Switch to the
+  next model when one runs out* (on by default); a TOML provider opts in
+  with `[usage] model_ladder` and `model_switch`.
+
 ## [0.14.31] - 2026-11-24
 
 ### Changed

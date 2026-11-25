@@ -261,3 +261,76 @@ def detect_limit(
     if not limited:
         return {"limited": False, "reset_at": None, "credits": credits}
     return {"limited": True, "reset_at": _parse_reset_at(text, now), "credits": False}
+
+
+# --------------------------------------------------------------------------- #
+# one model spent, not the plan: step down a model (core.model_downshift)
+# --------------------------------------------------------------------------- #
+#: A limit notice that NAMES the model it is about — one model's allowance is
+#: spent while the plan still has room. Claude Code: "You've hit your
+#: individual spend limit · … · your Fable limit resets Nov 30 at 11pm
+#: (America/New_York)"; "Opus limit reached ∙ resets 3am". The ``model``
+#: group is checked against the provider's ladder
+#: (``BaseProvider.model_ladder``), so "your weekly limit resets" or "5-hour
+#: limit reached" never reads as a model.
+MODEL_LIMIT_PATTERNS: tuple = (
+    r"your\s+(?P<model>[A-Za-z][\w.\-]*)(?:\s+[\d.]+)?\s+limit\s+resets",
+    r"(?P<model>[A-Za-z][\w.\-]*)(?:\s+[\d.]+)?\s+(?:usage\s+)?limit\s+reached",
+    r"(?:hit|reached)\s+your\s+(?P<model>[A-Za-z][\w.\-]*)(?:\s+[\d.]+)?\s+(?:usage\s+)?limit",
+)
+
+#: Lines after a model-limit notice that mean it is no longer the latest
+#: word: the agent answered (Claude Code's ``⏺``/``●`` reply bullet), or a
+#: model switch took ("Set model to Opus").
+MODEL_LIMIT_SUPERSEDED: tuple = (
+    r"^\s*[⏺●]\s",
+    r"set model to",
+    r"model (?:set|changed|switched) to",
+)
+
+
+def detect_model_limit(
+    text: str,
+    ladder: Sequence[str],
+    patterns: Sequence[str] = MODEL_LIMIT_PATTERNS,
+    superseded: Sequence[str] = MODEL_LIMIT_SUPERSEDED,
+    now: Optional[float] = None,
+) -> Optional[dict]:
+    """``{"model", "next", "reset_at"}`` when the LATEST notice on the pane
+    ``text`` is a limit on one named model of ``ladder`` (best first, e.g.
+    ``("fable", "opus", "sonnet", "haiku")``) and nothing came after it but
+    the prompt; ``next`` is the next model down, None at the bottom. None when
+    there is no such notice, it names no ladder model, or a reply or a model
+    switch came after it."""
+    if not text or not ladder:
+        return None
+    names = [str(m).strip().lower() for m in ladder if str(m).strip()]
+    best = None  # (end, model, start)
+    for p in patterns or ():
+        for m in re.finditer(p, text, re.I | re.M):
+            try:
+                said = (m.group("model") or "").lower()
+            except IndexError:
+                continue
+            if said not in names:
+                continue
+            if best is None or m.end() > best[0]:
+                best = (m.end(), said, m.start())
+    if best is None:
+        return None
+    end, model, start = best
+    after = text[end:]
+    for p in superseded or ():
+        if re.search(p, after, re.I | re.M):
+            return None
+    if now is None:
+        now = time.time()
+    # The notice wraps in a narrow pane ("resets\n     Nov 30 at 11pm"):
+    # read its reset on one line.
+    flat = re.sub(r"\s+", " ", text[start : end + 200])
+    i = names.index(model)
+    return {
+        "model": model,
+        "next": names[i + 1] if i + 1 < len(names) else None,
+        "reset_at": _parse_reset_at(flat, now),
+    }

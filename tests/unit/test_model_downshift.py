@@ -1,0 +1,386 @@
+"""One model spent, not the plan: step the session down a model
+(:mod:`backend.web.core.model_downshift`, ``usage_limits.detect_model_limit``)."""
+
+from __future__ import annotations
+
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from backend import providers
+from backend.providers import usage_limits
+from backend.providers.claude import ClaudeProvider
+from backend.session import Status
+from backend.web.core import model_downshift as md
+from backend.web.core import queue_driver
+
+NOW = 1_795_600_000.0  # 2026-11-25
+
+LADDER = ("fable", "opus", "sonnet", "haiku")
+
+#: What Claude Code printed on the Mac when Fable ran out (2026-11-24).
+FABLE_SCREEN = """\
+❯ what is the idea behind the 3 minute length
+  cap??
+  ⎿  4 skills available
+  ⎿  You've hit your individual spend limit ·
+     run /usage-credits to ask your admin for a
+     higher limit · your Fable limit resets
+     Nov 30 at 11pm (America/New_York)
+
+❯ continue
+  ⎿  You've hit your individual spend limit ·
+     run /usage-credits to ask your admin for a
+     higher limit · your Fable limit resets
+     Nov 30 at 11pm (America/New_York)
+     /usage-credits to request more usage from
+     your admin.
+
+───────────────────────────────────────────────
+❯
+───────────────────────────────────────────────
+  ⏵⏵ bypass permissions on
+"""
+
+
+# --------------------------------------------------------------------------- #
+# detection
+# --------------------------------------------------------------------------- #
+def test_the_fable_notice_steps_to_opus_with_its_reset():
+    got = usage_limits.detect_model_limit(FABLE_SCREEN, LADDER, now=NOW)
+    assert got["model"] == "fable" and got["next"] == "opus"
+    assert got["reset_at"] is not None and got["reset_at"] > NOW
+
+
+@pytest.mark.parametrize(
+    "text, model, nxt",
+    [
+        ("Opus limit reached ∙ resets 3am", "opus", "sonnet"),
+        ("You've reached your Sonnet usage limit · resets in 2h", "sonnet", "haiku"),
+        ("your Haiku limit resets in 3 hours", "haiku", None),
+        ("your Opus 5.5 limit resets Dec 1 at 9am", "opus", "sonnet"),
+    ],
+)
+def test_a_named_model_limit_names_the_next_one_down(text, model, nxt):
+    got = usage_limits.detect_model_limit(text, LADDER, now=NOW)
+    assert (got["model"], got["next"]) == (model, nxt)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Weekly limit reached ∙ resets Jul 24 at 10:59am (America/New_York)",
+        "5-hour limit reached ∙ resets 3am",
+        "You've hit your usage limit · resets 3pm",
+        "your weekly limit resets Monday",
+        "Claude usage limit reached",
+        "the API rate limit reached its cap in the test",  # an agent's prose
+        "",
+    ],
+)
+def test_an_account_wide_limit_or_prose_is_not_a_model_limit(text):
+    assert usage_limits.detect_model_limit(text, LADDER, now=NOW) is None
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        "❯ /model opus\n  ⎿  Set model to Opus 5.5\n",
+        "⏺ The 3-minute cap keeps each episode short.\n",
+        "● Sure.\n",
+    ],
+)
+def test_a_reply_or_a_switch_after_it_means_it_is_history(after):
+    assert usage_limits.detect_model_limit(FABLE_SCREEN + after, LADDER) is None
+
+
+def test_no_ladder_never_steps():
+    assert usage_limits.detect_model_limit(FABLE_SCREEN, ()) is None
+
+
+def test_claude_has_the_ladder_and_types_model_aliases():
+    p = ClaudeProvider()
+    assert tuple(p.model_ladder()) == LADDER
+    assert p.model_switch_command("opus") == "/model opus"
+    assert p.model_switch_command("gpt-5") is None
+    assert p.model_limit(FABLE_SCREEN, NOW)["next"] == "opus"
+
+
+def test_a_provider_without_a_ladder_never_reads_one():
+    from backend.providers.base import BaseProvider
+
+    class _P(BaseProvider):
+        name = "x"
+
+    assert _P().model_limit(FABLE_SCREEN) is None
+    assert _P().model_switch_command("opus") is None
+
+
+def test_a_toml_provider_opts_in_with_a_ladder_and_a_switch():
+    from backend.providers.config import ProviderConfig
+    from backend.providers.generic import GenericProvider
+
+    cfg = ProviderConfig(
+        name="toy",
+        program_aliases=("toy",),
+        usage_model_ladder=("big", "small"),
+        usage_model_switch="/model {model}",
+    )
+    p = GenericProvider(cfg)
+    assert p.model_switch_command("small") == "/model small"
+    got = p.model_limit("you've hit your Big limit · resets 3pm")
+    assert (got["model"], got["next"]) == ("big", "small")
+
+
+# --------------------------------------------------------------------------- #
+# the sweep
+# --------------------------------------------------------------------------- #
+class _Inst:
+    def __init__(self, title="w", program="claude", status=Status.Ready):
+        self.Title = title
+        self.Program = program
+        self.Status = status
+
+    def Started(self):
+        return True
+
+
+class _Srv(SimpleNamespace):
+    def __init__(self, *insts):
+        super().__init__()
+        self.ENGINE = SimpleNamespace(
+            instances={i.Title: i for i in insts}, lock=threading.RLock()
+        )
+        self._HUMAN_INPUT_AT = {}
+        self.sent = []
+
+    def _live_session_name(self, name):
+        return name
+
+    def _send_to_agent(self, name, text, submit=True):
+        self.sent.append((name, text))
+        return True
+
+
+def _row(title="w", **kw):
+    r = {"title": title, "activity": "idle", "sleeping": None}
+    r.update(kw)
+    return r
+
+
+@pytest.fixture(autouse=True)
+def _quiet(monkeypatch, tmp_path):
+    # Never the real ~/.claude/settings.json.
+    default_file = str(tmp_path / "claude-settings.json")
+    monkeypatch.setattr(
+        ClaudeProvider, "model_default_file", lambda self, inst=None: default_file
+    )
+    md._RESTORE.clear()
+    monkeypatch.setattr(md, "SWITCH_SETTLE_S", 0.0)
+    monkeypatch.setattr(md, "enabled", lambda: True)
+    monkeypatch.setattr(md, "_capture", lambda name: FABLE_SCREEN)
+    monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda inst, name: False)
+    from backend.web.core import sleep
+
+    monkeypatch.setattr(sleep, "hold_lease", lambda name, ttl, now=None: True)
+    md._SWITCHED.clear()
+    yield
+    md._SWITCHED.clear()
+    md._RESTORE.clear()
+
+
+def _tick(monkeypatch, srv, rows, emitted=None):
+    from backend.web.core import events
+
+    monkeypatch.setattr(events, "sessions_snapshot", lambda: rows)
+    monkeypatch.setattr(
+        events.BUS,
+        "emit",
+        lambda kind, **kw: (
+            emitted.append((kind, kw)) if emitted is not None else None
+        ),
+    )
+    return md.tick(srv, now=NOW)
+
+
+def test_an_idle_session_out_of_fable_switches_to_opus_and_carries_on(monkeypatch):
+    srv = _Srv(_Inst())
+    emitted = []
+    assert _tick(monkeypatch, srv, [_row()], emitted) == ["w"]
+    assert srv.sent[0] == ("mindflock_w", "/model opus")
+    name, text = srv.sent[1]
+    assert "Fable" in text and "Opus" in text and "Carry on" in text
+    ((kind, kw),) = emitted
+    assert kind == md.EVENT and kw["session"] == "w"
+    assert kw["data"]["from"] == "fable" and kw["data"]["to"] == "opus"
+    assert "from Fable to Opus" in kw["data"]["detail"]
+
+
+def test_it_switches_once_per_model_until_the_cooldown_passes(monkeypatch):
+    srv = _Srv(_Inst())
+    _tick(monkeypatch, srv, [_row()])
+    assert len(srv.sent) == 2
+    _tick(monkeypatch, srv, [_row()])  # the switch did not take: no loop
+    assert len(srv.sent) == 2
+    md._SWITCHED["w"] = ("fable", NOW - md.COOLDOWN_S - 1)
+    _tick(monkeypatch, srv, [_row()])  # retried after the cooldown
+    assert len(srv.sent) == 4
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _row(activity="working"),
+        _row(activity="clarify"),
+        _row(sleeping={"since": 1}),
+        _row(device="mac"),
+    ],
+)
+def test_a_session_not_idle_here_is_left_alone(monkeypatch, row):
+    srv = _Srv(_Inst())
+    assert _tick(monkeypatch, srv, [row]) == []
+    assert srv.sent == []
+
+
+def test_a_person_typing_or_a_dialog_holds_it(monkeypatch):
+    srv = _Srv(_Inst())
+    srv._HUMAN_INPUT_AT["w"] = NOW - 5
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    srv._HUMAN_INPUT_AT["w"] = NOW - 120
+    monkeypatch.setattr(queue_driver, "_dialog_on_screen", lambda inst, name: True)
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    assert srv.sent == []
+
+
+def test_other_clis_paused_sessions_and_the_setting_off_do_nothing(monkeypatch):
+    srv = _Srv(_Inst("a", program="aider"), _Inst("p", status=Status.Paused))
+    assert _tick(monkeypatch, srv, [_row("a"), _row("p")]) == []
+    srv = _Srv(_Inst())
+    monkeypatch.setattr(md, "enabled", lambda: False)
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    assert srv.sent == []
+
+
+def test_an_account_wide_limit_is_left_to_the_queue(monkeypatch):
+    srv = _Srv(_Inst())
+    monkeypatch.setattr(
+        md, "_capture", lambda name: "Weekly limit reached ∙ resets Jul 24 at 10am"
+    )
+    assert _tick(monkeypatch, srv, [_row()]) == []
+
+
+def test_the_bottom_of_the_ladder_stays_put(monkeypatch):
+    srv = _Srv(_Inst())
+    monkeypatch.setattr(md, "_capture", lambda name: "your Haiku limit resets 3pm\n❯ ")
+    assert _tick(monkeypatch, srv, [_row()]) == []
+
+
+def test_the_setting_reads_on_when_unset(monkeypatch):
+    monkeypatch.undo()
+    from backend.config import settings as _settings
+
+    for stored, on in ((None, True), (True, True), (False, False)):
+        monkeypatch.setattr(
+            _settings,
+            "load_settings",
+            lambda v=stored: SimpleNamespace(
+                general=SimpleNamespace(model_downshift=v)
+            ),
+        )
+        assert md.enabled() is on
+
+
+def test_the_setting_round_trips():
+    from backend.config.settings import GeneralSettings
+
+    g = GeneralSettings.from_dict({"model_downshift": False})
+    assert g.model_downshift is False
+    assert g.to_dict()["model_downshift"] is False
+    assert "model_downshift" not in GeneralSettings.from_dict({}).to_dict()
+
+
+def test_texts_say_when_the_model_is_back():
+    assert md._when(None) == ""
+    t = md.resume_text("fable", "opus", None)
+    assert t.startswith("MindFlock note: Fable's limit is used up, so")
+    assert md.notice_text("api", "fable", "opus", None) == (
+        "Switched “api” from Fable to Opus: Fable is used up"
+    )
+
+
+def test_providers_resolve_claude_with_the_ladder():
+    assert tuple(providers.resolve("claude").model_ladder()) == LADDER
+
+
+# --------------------------------------------------------------------------- #
+# the person's own default stays theirs
+# --------------------------------------------------------------------------- #
+def _write(path, obj):
+    import json
+
+    with open(path, "w") as f:
+        json.dump(obj, f)
+
+
+def _read(path):
+    import json
+
+    with open(path) as f:
+        return json.load(f)
+
+
+def test_the_switch_puts_the_persons_default_model_back(monkeypatch, tmp_path):
+    """Claude Code's ``/model opus`` also saves opus as the default for every
+    new session; the person's own default (fable) comes back, other keys
+    untouched."""
+    path = ClaudeProvider().model_default_file()
+    _write(path, {"model": "fable", "theme": "dark"})
+    srv = _Srv(_Inst())
+
+    def _cli_saves(name, text, submit=True):
+        srv.sent.append((name, text))
+        if text.startswith("/model "):
+            _write(path, {"model": text.split()[1], "theme": "dark"})
+        return True
+
+    srv._send_to_agent = _cli_saves
+    assert _tick(monkeypatch, srv, [_row()]) == ["w"]
+    assert _read(path) == {"model": "fable", "theme": "dark"}
+    # The CLI writes it late: the next pass inside the window fixes it too.
+    _write(path, {"model": "opus", "theme": "dark"})
+    assert md.restore_defaults(NOW + 10) == [path]
+    assert _read(path)["model"] == "fable"
+    # Past the window the watch ends: a later change is the person's own.
+    md.restore_defaults(NOW + md.RESTORE_WATCH_S + 1)
+    _write(path, {"model": "sonnet", "theme": "dark"})
+    assert md.restore_defaults(NOW + md.RESTORE_WATCH_S + 2) == []
+    assert _read(path)["model"] == "sonnet"
+
+
+def test_no_default_before_means_none_after(tmp_path):
+    path = str(tmp_path / "s.json")
+    _write(path, {"theme": "dark"})
+    md._remember_default(path, NOW)
+    _write(path, {"theme": "dark", "model": "opus"})
+    md.restore_defaults(NOW)
+    assert _read(path) == {"theme": "dark"}
+
+
+def test_a_second_switch_keeps_the_first_snapshot(tmp_path):
+    path = str(tmp_path / "s.json")
+    _write(path, {"model": "fable"})
+    md._remember_default(path, NOW)
+    _write(path, {"model": "opus"})  # the first switch saved opus
+    md._remember_default(path, NOW + 5)  # opus ran out too: a second switch
+    _write(path, {"model": "sonnet"})
+    md.restore_defaults(NOW + 6)
+    assert _read(path) == {"model": "fable"}
+
+
+def test_claudes_default_file_follows_its_config_dir(monkeypatch, tmp_path):
+    monkeypatch.undo()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    assert ClaudeProvider().model_default_file() == str(
+        tmp_path / "cfg" / "settings.json"
+    )
