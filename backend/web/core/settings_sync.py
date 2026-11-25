@@ -184,6 +184,8 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         # the person likes their rail, not a machine fact.
         "auto_close_children",
         "auto_close_grace_minutes",
+        # Stepping down a model when one runs out (core.model_downshift).
+        "model_downshift",
     ),
     "notifications": (
         "muted_rules",
@@ -471,6 +473,7 @@ LABELS: Dict[str, str] = {
     "general.workers_decide": "Workers: the agent decides",
     "general.auto_close_children": "Close finished sub-sessions automatically",
     "general.auto_close_grace_minutes": "Finished sub-sessions: minutes before closing",
+    "general.model_downshift": "Switch to the next model when one runs out",
     "notifications.muted_rules": "Muted notifications",
     "notifications.enabled_rules": "Enabled notifications",
     "notifications.ntfy_enabled": "Phone notifications on/off",

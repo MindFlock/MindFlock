@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.32] - 2026-11-25
+
+### Added
+
+- **A session that runs out of one model switches to the next and carries
+  on.** A plan can run out of one model while it still has room overall:
+  Claude Code then answers every prompt with "You've hit your individual
+  spend limit · … · your Fable limit resets Nov 30", and the session's
+  queue, route and orchestrator all stop there until that date. MindFlock
+  now spots that notice (the newest thing on the screen, naming a model),
+  types `/model opus` (the next model down: Fable → Opus → Sonnet → Haiku),
+  tells the agent to carry on with the request that bounced, and shows a
+  toast: *“api” switched from Fable to Opus: Fable is used up until Nov 30
+  at 11pm*. An account-wide limit (no model named) is still waited out as
+  before. Claude Code saves a `/model` choice as your default for new
+  sessions; MindFlock puts your own default back, so new sessions still
+  start on your usual model. Settings → Agent orchestration → *Switch to the
+  next model when one runs out* (on by default); a TOML provider opts in
+  with `[usage] model_ladder` and `model_switch`.
+
+### Fixed
+
+- **Finished sub-sessions close even when their parent works in another
+  repo.** An orchestrator sitting in one checkout (say the MindFlock repo)
+  that spawned workers into a second repo and merged them there left every
+  worker open: the sweep looked for the workers' commits in the
+  orchestrator's own checkout, never found them, and kept each one as
+  "unmerged commits". It now also counts a worker as merged when its commits
+  are in its own repository's main checkout.
+- **A worker that never called `report_result` closes once its work is
+  merged.** One that stopped short of reporting, or whose parent finished
+  the job for it, sat open forever as "has not reported". It now closes like
+  a reported one when it has commits of its own and all of them are merged
+  (still after the grace window, while nobody has it open, and not while its
+  parent is mid-turn). An unreported worker with no commits stays open.
+
 ## [0.14.31] - 2026-11-24
 
 ### Changed
@@ -7675,7 +7711,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.31...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.32...HEAD
+[0.14.32]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.32
 [0.14.31]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.31
 [0.14.30]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.30
 [0.14.29]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.29

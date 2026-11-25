@@ -2705,10 +2705,16 @@ a manual ✕, never deleted — when all of these hold:
    `blocked` waits on someone, so it stays — and nothing reached it since (a
    message, a queued prompt, a person typing). Its agent is idle, gone or
    asleep, with no question or dialog up, no prompt queued, no mail waiting, no
-   background job (`expect_background_job`), not shipping by itself.
+   background job (`expect_background_job`), not shipping by itself. A worker
+   that never called `report_result` (it stopped short, or its parent
+   finished the job for it) counts as finished once it has commits of its
+   own and all of them are merged (rule 3): the merge is the parent's word
+   that it is done. Without a report, "no commits" alone never closes it.
 3. **Its work is accounted for.** A clean worktree, and either no commits
    beyond its fork point, or every commit reachable from its parent's HEAD
-   (the same check `kill_session` `delete` makes), or — a `separate=true`
+   (the same check `kill_session` `delete` makes) or from the HEAD of its own
+   repository's main checkout (an orchestrator sitting in one repo that
+   spawned workers into another merges them there), or — a `separate=true`
    worker — its PR merged or was closed. **Unmerged work stays open**: that
    is unfinished business, not clutter.
 4. **The grace window passed** — `general.auto_close_grace_minutes`, 10 by

@@ -968,6 +968,52 @@ someone needs it.
   back into its own conversation. Remote `device::title` rows are never swept
   from here; opening one wakes it on its own device.
 
+### One model runs out
+
+A plan can run out of ONE model while it still has room overall. Claude Code
+then answers every prompt with a notice instead of a turn:
+
+```
+⎿  You've hit your individual spend limit · run /usage-credits to ask your
+   admin for a higher limit · your Fable limit resets Nov 30 at 11pm
+   (America/New_York)
+```
+
+It is not the plan's limit screen, so the session reads as idle, and its
+queue, its route and its orchestrator's messages all stop there until the
+date. The model-downshift sweep (`backend/web/core/model_downshift.py`, every
+15 s, one server per config dir via the `model-downshift` lease) does what
+you would: it types the switch to the next model down (`/model opus`), then
+one line telling the agent why and to carry on with the request that
+bounced, and emits `session.model_downshifted` (a toast: *Switched “api” from
+Fable to Opus: Fable is used up until Nov 30 at 11pm*). A limit on the new
+model steps down again; the bottom of the ladder stays put.
+
+It acts only when the newest notice on the session's screen is a limit that
+NAMES a model of its provider's ladder (`BaseProvider.model_ladder`,
+`model_limit`; Claude: Fable → Opus → Sonnet → Haiku) with nothing after it
+but the prompt — no reply, no "Set model to …" — the agent is idle, no dialog
+is up, nobody typed into it in the last 30 s, and it was not switched away
+from that same model in the last 5 minutes (a switch that did not take is
+retried after that, never in a loop). An account-wide limit names no model:
+that is the prompt queue's limit hold, untouched. A TOML provider opts in
+with `[usage] model_ladder = ["big", "small"]` and `model_switch = "/model
+{model}"`. Off with `general.model_downshift: false` (Settings → Agent
+orchestration) or `MINDFLOCK_MODEL_DOWNSHIFT=0`. The switch lasts for that
+agent process: a relaunch starts on the session's configured model again,
+and steps down again if that model is still spent.
+
+Claude Code's `/model opus` also SAVES the model as your default for every
+new session ("Set model to Opus 5.5 and saved as your default for new
+sessions"), which would leave all new sessions on Opus long after Fable is
+back. The sweep notes the `model` key of that settings.json (the session's
+account profile's config dir, else `$CLAUDE_CONFIG_DIR`, else `~/.claude`;
+`BaseProvider.model_default_file`) before it types, and puts your own value
+back right after, watching it for a minute in case the CLI writes late. Only
+that key is touched. A model chosen with `/model` outranks the settings
+default in a running session, so the restore never switches the session
+back.
+
 ### Memory guard
 
 A big job — a team run, an orchestrator fanning out workers, a ticket queue

@@ -50,6 +50,7 @@ Core vocabulary (emitted by the server):
 | `session.stage_changed` | `provisioning·agent·precommit·interrupt·committed·pushed·pr` flips | stages |
 | `session.budget_exceeded` | Estimated cost first crosses `general.session_budget_usd` | `data: {cost, budget}` |
 | `session.prompt_sent` | The queue drain loop auto-sends a prompt | `data: {text, remaining, loop}` |
+| `session.model_downshifted` | The model-downshift sweep switched a session down a model because its newest notice was a limit on ONE model (`web/core/model_downshift.py`, `general.model_downshift`); the app shows a toast | `new`: the model switched to; `data: {from, to, reset_at, detail}` — `detail` "Switched “api” from Fable to Opus: Fable is used up until Nov 30 at 11pm" |
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |

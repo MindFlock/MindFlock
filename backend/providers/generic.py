@@ -286,6 +286,15 @@ class GenericProvider(BaseProvider):
             return self.cfg.usage_credits_patterns
         return super().usage_credits_patterns()
 
+    def model_ladder(self):
+        return self.cfg.usage_model_ladder or super().model_ladder()
+
+    def model_switch_command(self, model):
+        tpl = self.cfg.usage_model_switch
+        if not tpl or not model:
+            return super().model_switch_command(model)
+        return tpl.replace("{model}", str(model))
+
     # --- usage-window knowledge (roadmap E) ------------------------------- #
     def usage_window(self) -> dict:
         return self.cfg.usage_window()

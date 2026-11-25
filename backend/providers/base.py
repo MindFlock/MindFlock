@@ -871,6 +871,47 @@ class BaseProvider:
             credits_patterns=self.usage_credits_patterns(),
         )
 
+    # --- one model spent: step down (core.model_downshift) --------------- #
+    def model_ladder(self) -> Sequence[str]:
+        """This CLI's models, best first, by the names its limit notices use
+        ("fable", "opus", "sonnet"…): when one is spent while the plan still
+        has room, the session steps to the next. Empty (the default) = the CLI
+        has no per-model limits MindFlock can step around."""
+        return ()
+
+    def model_switch_command(self, model: str) -> Optional[str]:
+        """What to type to switch the running CLI to ``model`` (Claude Code:
+        ``/model opus``), or None when it can't be switched in place."""
+        return None
+
+    def model_default_file(self, inst=None) -> Optional[str]:
+        """A JSON file whose ``"model"`` key the switch command also rewrites
+        as the CLI's default for new sessions (Claude Code's settings.json),
+        so the downshift can put the person's own default back. None = the
+        switch leaves no default behind."""
+        return None
+
+    def model_limit_patterns(self) -> Sequence[str]:
+        """Regexes for a limit notice that names its model (a ``model``
+        group). Default: :data:`usage_limits.MODEL_LIMIT_PATTERNS`."""
+        from .usage_limits import MODEL_LIMIT_PATTERNS
+
+        return MODEL_LIMIT_PATTERNS
+
+    def model_limit(
+        self, pane_text: str, now: Optional[float] = None
+    ) -> Optional[dict]:
+        """``{"model", "next", "reset_at"}`` when the newest notice on the
+        pane is a limit on one model of :meth:`model_ladder`, else None."""
+        ladder = self.model_ladder()
+        if not ladder:
+            return None
+        from .usage_limits import detect_model_limit
+
+        return detect_model_limit(
+            pane_text, ladder, self.model_limit_patterns(), now=now
+        )
+
     # --- minimal / connection-free launch (roadmap E) -------------------- #
     def minimal_launch_command(
         self, workdir: str = "", session_name: str = ""

@@ -503,8 +503,9 @@ FastAPI app `backend.web.server:app`. Key pieces:
   [session-engine.md](session-engine.md#sleeping-agents).
 - **Auto-close** (`web/core/auto_close.py`) — the lifespan's auto-close sweep
   CLOSES (worktree kept) an agent-spawned worker that reported done/failed,
-  sits idle and unwatched, and whose work is merged into its parent (or has
-  none, or its PR merged/closed), `general.auto_close_grace_minutes` after it
+  sits idle and unwatched, and whose work is merged into its parent or its
+  repository's main checkout (or has none, or its PR merged/closed; an
+  unreported worker closes only on merged commits), `general.auto_close_grace_minutes` after it
   finished — one `system.subsessions_closed` event per parent per pass (the
   app's toast with Undo). Its parent leaving records the worker as an orphan
   (`note_parent_gone`, from both removal paths). Like the sleep sweep it runs

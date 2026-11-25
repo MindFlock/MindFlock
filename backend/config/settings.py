@@ -1362,6 +1362,13 @@ class GeneralSettings:
     ``None`` (never set) reads as ON; ``False`` turns it off. A session's own
     "Keep open" (its ⋯ menu) still wins.
 
+    ``model_downshift`` ("Switch to the next model when one runs out"): when a
+    session's newest notice is a limit on ONE model while the plan still has
+    room ("your Fable limit resets Nov 30"), MindFlock types the switch to the
+    next model down (``/model opus``) and tells the agent to carry on
+    (:mod:`backend.web.core.model_downshift`). ``None`` (never set) reads as
+    ON; ``False`` turns it off.
+
     ``auto_close_grace_minutes``: how long such a finished worker stays open
     first, so its parent can still read it, and how long after a person last
     typed into it. ``None`` = 10; at least 1.
@@ -1465,6 +1472,7 @@ class GeneralSettings:
     memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
     auto_close_children: Optional[bool] = None  # None = on (see docstring)
     auto_close_grace_minutes: Optional[int] = None  # None = 10 (see docstring)
+    model_downshift: Optional[bool] = None  # None = on (see docstring)
     memory_low_pct: Optional[int] = None  # None = 8 (see docstring)
     memory_critical_pct: Optional[int] = None  # None = 4 (see docstring)
     max_live_agents: Optional[int] = None  # None = RAM / 1.2 GB; 0 = no cap
@@ -1525,6 +1533,8 @@ class GeneralSettings:
             d["sleep_idle_minutes"] = self.sleep_idle_minutes
         if self.auto_close_children is not None:
             d["auto_close_children"] = self.auto_close_children
+        if self.model_downshift is not None:
+            d["model_downshift"] = self.model_downshift
         for key in (
             "auto_close_grace_minutes",
             "memory_sleep_minutes",
@@ -1590,6 +1600,7 @@ class GeneralSettings:
             memory_sleep_minutes=_opt_nonneg_int(d.get("memory_sleep_minutes")),
             auto_close_children=_opt_bool(d.get("auto_close_children")),
             auto_close_grace_minutes=_opt_pos_int(d.get("auto_close_grace_minutes")),
+            model_downshift=_opt_bool(d.get("model_downshift")),
             memory_low_pct=_opt_pct(d.get("memory_low_pct")),
             memory_critical_pct=_opt_pct(d.get("memory_critical_pct")),
             max_live_agents=_opt_nonneg_int(d.get("max_live_agents")),

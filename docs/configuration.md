@@ -960,6 +960,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `MINDFLOCK_OOM_SCORE_ADJ` | `500` | The `oom_score_adj` every agent launch (and shell tab) gives itself, so under memory pressure the kernel kills an agent's process tree before the server ([session-engine.md](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)); an integer up to 1000, `0` turns it off. Read when a launch command or launcher script is generated (a provisioned launcher keeps the value it was written with) |
 | `MINDFLOCK_AUTO_CLOSE` | on | `0` starts the server without the auto-close sweep ([mcp.md](mcp.md#finished-workers-close-themselves)) — no finished worker is closed by itself, whatever `general.auto_close_children` says (sandboxed or scratch servers) |
+| `MINDFLOCK_MODEL_DOWNSHIFT` | on | `0` starts the server without the model-downshift sweep ([session-engine.md](session-engine.md#one-model-runs-out)) — no session is switched to another model by itself, whatever `general.model_downshift` says (sandboxed or scratch servers) |
 | `MINDFLOCK_SLEEP` | on | `0` starts the server without the sleep sweep ([session-engine.md](session-engine.md#sleeping-agents)) — no idle agent is put to sleep, whatever `general.sleep_idle_minutes` says (sandboxed or scratch servers). Sleepers already recorded still wake normally |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
@@ -1358,13 +1359,21 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `general.auto_close_grace_minutes`; Settings → Agent orchestration →
   **Close finished sub-sessions automatically**): a worker an agent spawned
   is CLOSED (worktree and branch kept, in Recently closed) once it reported
-  done or failed, sits idle, and its work is merged into its parent's HEAD,
-  has no commits of its own, or its PR merged or was closed — after the grace
+  done or failed (or never reported but its commits are all merged), sits
+  idle, and its work is merged into its parent's HEAD or its repository's
+  main checkout, has no commits of its own, or its PR merged or was closed — after the grace
   minutes (unset = 10, at least 1) and while nobody has it open
   ([mcp.md](mcp.md#finished-workers-close-themselves)). Unset reads as ON;
   `false` turns it off; a session's ⋯ → Keep open opts one out. Synced (it is
   how the person likes their rail). Read per sweep, so a save applies within
   a minute.
+- **Switch to the next model when one runs out** (`general.model_downshift`;
+  Settings → Agent orchestration): when a session's newest notice is a limit
+  on ONE model while the plan still has room (Claude Code: "your Fable limit
+  resets Nov 30"), MindFlock types `/model opus` (the next model down: Fable →
+  Opus → Sonnet → Haiku) and tells the agent to carry on with the request that
+  bounced ([session-engine.md](session-engine.md#one-model-runs-out)). Unset
+  reads as ON; `false` turns it off. Synced.
 - **Memory thresholds** (`general.memory_low_pct`, `general.memory_critical_pct`,
   `general.memory_sleep_minutes`; JSON / `PUT /api/settings`): when this
   machine counts as short of memory — the share of RAM the kernel reports
