@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Finished sub-sessions close even when their parent works in another
+  repo.** An orchestrator sitting in one checkout (say the MindFlock repo)
+  that spawned workers into a second repo and merged them there left every
+  worker open: the sweep looked for the workers' commits in the
+  orchestrator's own checkout, never found them, and kept each one as
+  "unmerged commits". It now also counts a worker as merged when its commits
+  are in its own repository's main checkout.
+- **A worker that never called `report_result` closes once its work is
+  merged.** One that stopped short of reporting, or whose parent finished
+  the job for it, sat open forever as "has not reported". It now closes like
+  a reported one when it has commits of its own and all of them are merged
+  (still after the grace window, while nobody has it open, and not while its
+  parent is mid-turn). An unreported worker with no commits stays open.
+
 ## [0.14.31] - 2026-11-24
 
 ### Changed

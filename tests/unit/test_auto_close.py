@@ -327,12 +327,51 @@ def test_a_worker_with_open_workers_of_its_own_stays():
     [
         ({"status": "failed", "ts": NOW - 2 * GRACE}, ac.CLOSE, ac.W_MERGED),
         ({"status": "blocked", "ts": NOW - 2 * GRACE}, ac.KEEP, ac.R_BLOCKED),
-        (None, ac.KEEP, ac.R_NO_REPORT),
+        ({"status": "working", "ts": NOW - 2 * GRACE}, ac.KEEP, ac.R_NO_REPORT),
     ],
 )
-def test_done_or_failed_closes_blocked_and_unreported_stay(report, verdict, why):
+def test_done_or_failed_closes_blocked_and_unknown_stay(report, verdict, why):
     srv, w = _world()
     assert _judge(srv, w, _row(last_report=report))[:2] == (verdict, why)
+
+
+@pytest.mark.parametrize(
+    "accounted, verdict, why",
+    [
+        # Its commits are merged: the parent finished it, report or not.
+        ((True, ac.W_MERGED), ac.CLOSE, ac.W_MERGED),
+        ((True, ac.W_MERGED_HOME), ac.CLOSE, ac.W_MERGED_HOME),
+        ((True, ac.W_PR_MERGED), ac.CLOSE, ac.W_PR_MERGED),
+        # Nothing merged says it is done: an idle worker may just be waiting.
+        ((True, ac.W_NO_COMMITS), ac.KEEP, ac.R_NO_REPORT),
+        ((True, ac.W_PR_CLOSED), ac.KEEP, ac.R_NO_REPORT),
+        ((False, ac.R_UNMERGED), ac.KEEP, ac.R_UNMERGED),
+    ],
+)
+def test_a_worker_that_never_reported_closes_only_once_its_work_is_merged(
+    monkeypatch, accounted, verdict, why
+):
+    srv, w = _world(worker=_Inst(base="f0rk"))
+    monkeypatch.setattr(ac, "work_accounted", lambda *a: accounted)
+    assert _judge(srv, w, _row(last_report=None))[:2] == (verdict, why)
+    # Without a known fork point "merged" can't tell it ever committed.
+    srv, w = _world()
+    stays = why if not accounted[0] else ac.R_NO_REPORT
+    assert _judge(srv, w, _row(last_report=None))[:2] == (ac.KEEP, stays)
+
+
+def test_an_unreported_merged_worker_waits_out_its_window_and_a_busy_parent(
+    monkeypatch,
+):
+    srv, w = _world(worker=_Inst(base="f0rk"))
+    # Idle only 1 minute: still in its grace window.
+    row = _row(last_report=None, activity_since=NOW - 60)
+    assert _judge(srv, w, row) == (ac.WAIT, ac.R_GRACE, NOW - 60 + GRACE)
+    # A message after the merge does not hold it once it is idle again.
+    srv._MAIL_STATE["w"] = {"sent_at": NOW - GRACE - 60}
+    assert _judge(srv, w, _row(last_report=None))[:2] == (ac.CLOSE, ac.W_MERGED)
+    srv.activity["lead"] = "working"  # its parent merged it mid-turn
+    assert _judge(srv, w, _row(last_report=None))[:2] == (ac.WAIT, ac.R_PARENT_BUSY)
 
 
 @pytest.mark.parametrize("clock", ["_MAIL_STATE", "_QUEUE_STATE", "_HUMAN_INPUT_AT"])
@@ -447,6 +486,45 @@ def test_merged_into_the_parents_head_is_accounted_for(repo, monkeypatch):
     assert _accounted(repo) == (True, ac.W_MERGED)
 
 
+def test_a_parent_in_another_repository_counts_the_workers_own_checkout(
+    repo, tmp_path, monkeypatch
+):
+    """An orchestrator sitting in one repo spawned the worker in another and
+    merged it there: its own HEAD never holds the worker's commits."""
+    monkeypatch.undo()
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    _git(
+        other,
+        "-c",
+        "user.email=t@e.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "unrelated",
+    )
+    with open(os.path.join(repo.wt, "b.txt"), "w") as f:
+        f.write("b\n")
+    _git(repo.wt, "add", "b.txt")
+    _git(repo.wt, "commit", "-qm", "work")
+    inst = _Inst(wt=repo.wt, base=repo.base)
+    lead = _Inst("lead", parent="", spawned=False, wt=str(other))
+    srv = _Srv(lead, inst)
+    assert ac.work_accounted(srv, inst, "w", _row(), "lead", None) == (
+        False,
+        ac.R_UNMERGED,
+    )
+    _git(repo.main, "merge", "-q", "--no-edit", "mf/w")
+    assert ac.work_accounted(srv, inst, "w", _row(), "lead", None) == (
+        True,
+        ac.W_MERGED_HOME,
+    )
+
+
 def test_uncommitted_changes_keep_it(repo, monkeypatch):
     monkeypatch.undo()
     with open(os.path.join(repo.wt, "a.txt"), "a") as f:
@@ -552,19 +630,26 @@ def test_an_orphan_with_nothing_unmerged_closes_on_its_recorded_report():
     assert _judge(srv, w, _row(last_report=None))[0] == ac.CLOSE
 
 
-def test_a_parent_missing_from_my_engine_but_not_tombstoned_is_not_gone():
+def test_a_parent_missing_from_my_engine_but_not_tombstoned_is_not_gone(monkeypatch):
     """Two servers: the parent may live in the other one's ENGINE (or be too
     new for state.json). Only a tombstone on disk says it left."""
-    w = _Inst(parent="lead")
+    w = _Inst(parent="lead", base="f0rk")
     srv = _Srv(w)  # "lead" is not in THIS server's ENGINE
     assert _judge(srv, w, disk=_disk("w", "lead"))[:2] == (
         ac.KEEP,
         ac.R_PARENT_ELSEWHERE,
     )
     assert _judge(srv, w, disk=_disk("w"))[:2] == (ac.KEEP, ac.R_PARENT_ELSEWHERE)
-    # Tombstoned: gone — an orphan, flagged (its report is unknown).
-    verdict, why, _ = _judge(srv, w, disk=_disk("w", tombstoned={"lead": NOW}))
-    assert (verdict, why) == (ac.ORPHAN, ac.R_NO_REPORT)
+    # Tombstoned: gone — an orphan, flagged (its report is unknown) while
+    # nothing merged says it is done; merged, it closes like any worker.
+    gone = _disk("w", tombstoned={"lead": NOW})
+    assert _judge(srv, w, disk=gone)[:2] == (ac.CLOSE, ac.W_MERGED)
+    for accounted, why in (
+        ((True, ac.W_NO_COMMITS), ac.R_NO_REPORT),
+        ((False, ac.R_UNMERGED), ac.R_UNMERGED),
+    ):
+        monkeypatch.setattr(ac, "work_accounted", lambda *a, _r=accounted: _r)
+        assert _judge(srv, w, disk=gone)[:2] == (ac.ORPHAN, why)
 
 
 def test_a_worker_not_live_on_disk_is_never_closed():

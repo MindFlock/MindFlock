@@ -1358,8 +1358,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `general.auto_close_grace_minutes`; Settings → Agent orchestration →
   **Close finished sub-sessions automatically**): a worker an agent spawned
   is CLOSED (worktree and branch kept, in Recently closed) once it reported
-  done or failed, sits idle, and its work is merged into its parent's HEAD,
-  has no commits of its own, or its PR merged or was closed — after the grace
+  done or failed (or never reported but its commits are all merged), sits
+  idle, and its work is merged into its parent's HEAD or its repository's
+  main checkout, has no commits of its own, or its PR merged or was closed — after the grace
   minutes (unset = 10, at least 1) and while nobody has it open
   ([mcp.md](mcp.md#finished-workers-close-themselves)). Unset reads as ON;
   `false` turns it off; a session's ⋯ → Keep open opts one out. Synced (it is
