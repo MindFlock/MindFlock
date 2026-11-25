@@ -531,6 +531,15 @@ def _ppid(pid: int) -> Optional[int]:
         return None
 
 
+#: What tmux says when the session (or its whole server) does not exist:
+#: nobody is attached, for certain.
+_TMUX_GONE = (
+    "can't find session",
+    "no server running",
+    "no such file or directory",
+)
+
+
 def _outside_clients(name: str) -> int:
     """How many tmux clients are attached to session ``name`` from OUTSIDE
     this server — ``mindflock attach``, a raw ``tmux attach``, SSH, a Windows
@@ -538,18 +547,24 @@ def _outside_clients(name: str) -> int:
     (its children) are left out: the web terminals are counted by
     ``ownership.terminals`` already, and the engine keeps a PTY attached to
     every session it STARTED in this process (``TmuxSession.restore``), which
-    is nobody looking. Unknown reads as 1: when in doubt, someone is."""
+    is nobody looking. Unknown reads as 1: when in doubt, someone is.
+
+    A session tmux says does not exist (an agent put to sleep, its session
+    gone), or no tmux server at all, is NOT unknown: nobody can be attached,
+    so 0. Reading that as 1 held every sleeping finished worker open as
+    "open in a terminal" forever (core.auto_close)."""
     try:
         from backend.web.core import proc as _proc
 
         out = _proc.run_capped(
             ["tmux", "list-clients", "-t", "=" + name, "-F", "#{client_pid}"],
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             timeout=10,
         )
         if out.returncode != 0:
-            return 1
+            err = (out.stderr or b"").decode("utf-8", "replace").lower()
+            return 0 if any(p in err for p in _TMUX_GONE) else 1
         pids = [
             int(x)
             for x in (out.stdout or b"").decode("ascii", "replace").split()

@@ -330,6 +330,60 @@ def test_only_clients_from_outside_this_server_count_as_watching(monkeypatch):
         proc, "run_capped", lambda args, **kw: SimpleNamespace(returncode=1, stdout=b"")
     )
     assert _REAL_OUTSIDE_CLIENTS("mindflock_a") == 1  # unknown: someone is
+    for said, n in (
+        # tmux's own words for "there is no such session": nobody attached.
+        (b"can't find session: mindflock_a\n", 0),
+        (b"no server running on /tmp/tmux-1000/default\n", 0),
+        (
+            b"error connecting to /tmp/tmux-1000/default (No such file or directory)\n",
+            0,
+        ),
+        # Anything else is still unknown: someone is.
+        (b"server exited unexpectedly\n", 1),
+    ):
+        monkeypatch.setattr(
+            proc,
+            "run_capped",
+            lambda args, _e=said, **kw: SimpleNamespace(
+                returncode=1, stdout=b"", stderr=_e
+            ),
+        )
+        assert _REAL_OUTSIDE_CLIENTS("mindflock_a") == n, said
+
+
+def test_a_sleeping_workers_gone_tmux_session_is_not_open_in_a_terminal(tmp_path):
+    """Real tmux on a scratch socket: a session that does not exist has no
+    clients (an agent put to sleep), so a finished worker is not held open
+    as "open in a terminal" forever."""
+    import os
+    import shutil
+    import subprocess
+
+    if not shutil.which("tmux"):
+        pytest.skip("no tmux")
+    sock = str(tmp_path / "tmux.sock")
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+
+    def run(args, **kw):
+        return subprocess.run(["tmux", "-S", sock] + list(args[1:]), env=env, **kw)
+
+    import backend.web.core.proc as proc_mod
+
+    real = proc_mod.run_capped
+    try:
+        proc_mod.run_capped = run
+        # No server at all on that socket.
+        assert _REAL_OUTSIDE_CLIENTS("mindflock_gone") == 0
+        subprocess.run(
+            ["tmux", "-S", sock, "new-session", "-d", "-s", "other", "sleep 30"],
+            env=env,
+            check=True,
+        )
+        # A server, but not that session.
+        assert _REAL_OUTSIDE_CLIENTS("mindflock_gone") == 0
+    finally:
+        proc_mod.run_capped = real
+        subprocess.run(["tmux", "-S", sock, "kill-server"], env=env)
 
 
 def test_typing_through_a_raw_tmux_client_vetoes():
