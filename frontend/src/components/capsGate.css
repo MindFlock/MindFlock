@@ -38,7 +38,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 
 .caps-gate {
   border: 1px dashed var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel-2);
   color: var(--muted);
   padding: 14px 16px;
@@ -63,7 +63,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .caps-gate code {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   font-size: 12px;
 }

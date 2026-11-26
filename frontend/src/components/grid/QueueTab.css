@@ -11,7 +11,7 @@
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   color: var(--muted);
   border: 1px solid var(--border);
@@ -77,7 +77,7 @@
 .queue-console.file-hover {
   outline: 2px dashed var(--accent);
   outline-offset: -8px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .queue-console.file-hover > * {
@@ -113,7 +113,7 @@
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   font-family: inherit;
   font-size: 14px;
@@ -135,8 +135,9 @@
 .queue-actions button {
   flex: 1;
   cursor: pointer;
-  border-radius: 7px;
-  padding: 8px 12px;
+  border-radius: var(--radius);
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
   font-size: 13px;
   font-weight: 600;
   font-family: inherit;
@@ -190,7 +191,7 @@
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 6px;
   font-family: inherit;
   font-size: 13px;
@@ -218,7 +219,7 @@
   padding: 8px 12px;
   margin-bottom: 8px;
   font-size: 13px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
@@ -360,7 +361,7 @@
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   font-family: inherit;
   font-size: 14px;
@@ -380,8 +381,9 @@
 
 .queue-item-edit-btns button {
   cursor: pointer;
-  border-radius: 6px;
-  padding: 6px 16px;
+  border-radius: var(--radius);
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
   font-size: 13px;
   font-weight: 600;
   font-family: inherit;
@@ -405,9 +407,10 @@
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 13px;
-  padding: 3px 8px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   font-family: inherit;
 }
 
@@ -431,7 +434,7 @@
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 7px;
+  border-radius: var(--radius);
 }
 
 .queue-clear:hover {

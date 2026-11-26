@@ -35,7 +35,7 @@
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   min-height: 0;
   /* Trap the pane's internal overlays (running-cover, budget-lock, file-drop)
@@ -61,7 +61,7 @@
   pointer-events: none;
   border: 2px dashed var(--accent);
   background: rgba(var(--accent-rgb), 0.12);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .pane-head {
@@ -158,7 +158,7 @@
   font-size: 11px;
   color: var(--warn, #d9a441);
   border: 1px solid currentColor;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
 }
 
@@ -174,7 +174,7 @@
   font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
 }
 
@@ -326,8 +326,9 @@
 .paused-body .paused-resume {
   cursor: pointer;
   font-size: 12px;
-  padding: 6px 16px;
-  border-radius: 7px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -401,7 +402,7 @@
   flex: none;
   background: none;
   border: none;
-  padding: 0 2px;
+  padding: 0 4px;
   cursor: pointer;
   color: var(--accent);
   font-weight: 700;
@@ -536,8 +537,9 @@
   color: var(--muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   white-space: nowrap;
 }
 
@@ -579,7 +581,7 @@
   flex: none;
   font-size: 11px;
   padding: 4px 11px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   white-space: nowrap;
   font-weight: 600;
 }
@@ -833,7 +835,9 @@
   cursor: pointer;
   font-size: 11px;
   padding: 3px 9px;
-  border-radius: 6px;
+  min-height: var(--ctl-h-sm);
+  align-items: center;
+  border-radius: var(--radius);
 }
 
 .pane-head .act:hover {
@@ -1207,7 +1211,7 @@
   font: inherit;
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -1235,7 +1239,7 @@
   z-index: 5;
   max-width: calc(100% - 24px);
   padding: 4px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -1261,7 +1265,7 @@
   transform: translateX(-50%);
   z-index: 5;
   padding: 3px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12px;
   white-space: nowrap;
   color: var(--muted);
@@ -1292,8 +1296,9 @@
 .term-cover button {
   cursor: pointer;
   font-size: 12px;
-  padding: 6px 16px;
-  border-radius: 7px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -1318,7 +1323,8 @@
 
 /* ▶ Resume, only on a paused session (there is no Pause button). */
 .pane-head .act.pane-resume {
-  padding: 2px 8px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
@@ -1352,7 +1358,7 @@
   padding: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
@@ -1366,8 +1372,9 @@
   color: var(--text);
   font: inherit;
   font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 5px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -1391,9 +1398,10 @@
 }
 
 .pane-noagent button {
-  padding: 3px 10px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--accent);
   color: var(--accent-ink);
   font: inherit;
@@ -1437,7 +1445,7 @@
 .pane.pane-embedded {
   width: 100%;
   height: 100%;
-  border-radius: 0 0 10px 10px;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   border-width: 1px 0 0;
 }
 

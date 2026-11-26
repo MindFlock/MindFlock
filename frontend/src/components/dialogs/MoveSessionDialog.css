@@ -3,7 +3,7 @@
 #move-form {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   width: 520px;
   max-width: 92vw;
@@ -44,7 +44,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   font-size: 14px;
 }

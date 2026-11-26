@@ -16,7 +16,7 @@
 .coach-ring {
   position: fixed;
   border: 2px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent),
     0 0 0 9999px rgba(0, 0, 0, 0.22);
@@ -34,7 +34,7 @@
   pointer-events: auto;
   background: var(--panel);
   border: 1px solid var(--accent);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px 10px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
   color: var(--text);
@@ -131,8 +131,9 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
-  padding: 3px 12px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   line-height: 1.4;
 }
 

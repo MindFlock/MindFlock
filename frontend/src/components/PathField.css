@@ -14,7 +14,7 @@
 
 .path-field-browse {
   flex: none;
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 0 12px;
   font-size: 12px;
   font-family: inherit;
@@ -55,8 +55,9 @@
 }
 
 .path-cand {
-  border-radius: 999px;
-  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font-size: 12px;
   font-family: var(--mono, ui-monospace, monospace);
   cursor: pointer;

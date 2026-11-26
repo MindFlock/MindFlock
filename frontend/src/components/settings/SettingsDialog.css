@@ -14,7 +14,7 @@
   --set-tight: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 24px;
   width: 780px;
   max-width: calc(100vw - 32px);
@@ -123,7 +123,7 @@ p.set-hint {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
@@ -226,7 +226,7 @@ p.set-hint {
   white-space: nowrap;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 13px;
   color: var(--text);

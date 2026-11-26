@@ -432,8 +432,8 @@ describe("type and contrast", () => {
     expect(cssRule(vis, ".light")).toContain("--sky-ink-gold: #7a5a10");
   });
 
-  it("the ⋯ menu: 13.5px items in 32px rows, screen-sized at any zoom, a rule above each group", () => {
-    expect(cssRule(sky, ".skl-menu .vf-menu-list .vf-menu-item")).toMatch(/min-height: 32px;[\s\S]*font-size: 13.5px/);
+  it("the ⋯ menu: 14px items in 32px rows, screen-sized at any zoom, a rule above each group", () => {
+    expect(cssRule(sky, ".skl-menu .vf-menu-list .vf-menu-item")).toMatch(/min-height: 32px;[\s\S]*font-size: 14px/);
     expect(cssRule(sky, ".skl-menu .vf-menu-list")).toContain("transform: scale(calc(1 / var(--sky-z, 1)))");
     expect(cssRule(sky, ".skl-menu .vf-menu-list .vf-menu-item.skl-mi-group::before")).toContain("border-top: 1px solid var(--border)");
     expect(cssRule(vis, ".sky-line-slot:has(.skl-menu .vf-menu[open])")).toContain("z-index: 40");

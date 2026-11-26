@@ -178,7 +178,7 @@ body #mf-winctl {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
@@ -213,7 +213,7 @@ body #mf-winctl {
   min-width: 14px;
   height: 14px;
   padding: 0 4px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   font-size: 9px;
   font-weight: 700;
   line-height: 14px;
@@ -263,7 +263,7 @@ body #mf-winctl {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -278,10 +278,10 @@ body #mf-winctl {
 
 #topbar #theme-btn {
   height: 24px;
-  padding: 0 5px;
+  padding: 0 6px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1;
   color: var(--text);
@@ -304,7 +304,7 @@ body #mf-winctl {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   height: 24px;
   padding: 0 6px;
   font-size: 11px;
@@ -373,7 +373,7 @@ body #mf-winctl {
   padding: 4px;
   background: var(--app-panel, var(--panel));
   border: 1px solid var(--app-border, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
   -webkit-app-region: no-drag;
 }
@@ -386,7 +386,7 @@ body #mf-winctl {
   width: 100%;
   padding: 6px 9px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--app-text, var(--text));
   font-size: 13px;
@@ -411,7 +411,7 @@ body #mf-winctl {
   margin: 0 2px;
   padding: 1px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   gap: 1px;
 }
 
@@ -419,7 +419,7 @@ body #mf-winctl {
   height: 20px;
   gap: 4px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
 }
 

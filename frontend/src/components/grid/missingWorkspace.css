@@ -31,8 +31,9 @@
 /* Row-level Clean up button (replaces the ✕ kill on missing rows). */
 .inst .kill.cleanup {
   font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius);
   opacity: 1;
   border: 1px solid var(--border);
   background: var(--panel-2);
@@ -83,8 +84,9 @@
 .missing-body .missing-cleanup {
   cursor: pointer;
   font-size: 12px;
-  padding: 6px 16px;
-  border-radius: 7px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--red);

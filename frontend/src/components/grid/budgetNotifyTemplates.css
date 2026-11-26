@@ -20,7 +20,7 @@
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--gold);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 18px 20px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   text-align: center;
@@ -50,7 +50,7 @@
 
 .budget-lock .bl-limit {
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -67,7 +67,7 @@
 .budget-lock .bl-dur {
   flex: 1 1 auto;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   border: 1px solid var(--border);
   background: var(--panel-2);
@@ -127,7 +127,7 @@
 .new-templates {
   margin: 4px 0 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
@@ -150,8 +150,9 @@
 .new-templates .nt-chip {
   cursor: pointer;
   font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 999px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);

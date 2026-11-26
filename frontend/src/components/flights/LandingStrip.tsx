@@ -13,7 +13,7 @@
  * (`data`), refetched every minute.
  *
  * The look is ux-lab SKY_OBJECT_STYLE.md (LandingStrip.css): the session
- * frame's calm box — one hairline, radius 14px, a 30px title strip with the
+ * frame's calm box — one hairline, the large radius (--radius-lg), a 30px title strip with the
  * title in normal case and quiet `fl-icon-btn`s — and quiet rows separated
  * by hairlines. It drags by its title bar (`onHeadDown`, unless `draggable`
  * is false — click mode), expands from it (▸ / ▾, `open`: every merged row

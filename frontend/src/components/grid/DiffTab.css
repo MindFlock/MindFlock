@@ -2,7 +2,7 @@
 .stagechip {
   font-size: 10px;
   padding: 1px 7px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   flex: none;
   background: var(--panel-2);
   color: var(--muted);
@@ -205,8 +205,9 @@
   color: var(--muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
 }
 
 .diff-modes button:hover {
@@ -302,9 +303,10 @@
   align-items: center;
   gap: 4px;
   flex: none;
-  padding: 1px 7px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--muted);
   cursor: pointer;
@@ -326,8 +328,9 @@
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   flex: none;
 }
 
@@ -376,8 +379,9 @@
   color: var(--text);
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   flex: none;
 }
 
@@ -414,8 +418,9 @@
   color: var(--text);
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   flex: none;
 }
 
@@ -506,7 +511,7 @@
 #empty.clickable {
   cursor: pointer;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   margin: 10px;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
 }

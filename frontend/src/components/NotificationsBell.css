@@ -6,7 +6,8 @@
   cursor: pointer;
   color: var(--muted);
   font-size: 15px;
-  padding: 2px 4px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   line-height: 1;
 }
 
@@ -40,7 +41,7 @@
   min-width: 15px;
   height: 15px;
   padding: 0 3px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--red);
   color: var(--red-ink);
   font-size: 9px;
@@ -75,7 +76,7 @@
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   color: var(--text);
   font-size: 12px;
@@ -103,8 +104,9 @@
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
-  padding: 2px 6px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -118,8 +120,9 @@
 .notif-clear {
   cursor: pointer;
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
@@ -240,7 +243,7 @@
   flex-wrap: wrap;
   gap: 6px;
   padding: 4px 4px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   cursor: pointer;
   font-size: 12px;
 }
@@ -380,7 +383,8 @@
 .notif-attn .ob-item .ik-item-start .pr-review-btn,
 .notif-attn .ob-item .ik-item-start .ob-ship {
   min-width: 0;
-  padding: 4px 12px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   font-size: 12px;
 }
 
@@ -406,7 +410,8 @@
   grid-row: 2;
   justify-self: end;
   align-self: start;
-  padding: 1px 8px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font-size: 11px;
 }
 

@@ -7,7 +7,7 @@
 
 .fl-palette {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   padding: 12px;
   display: flex;
@@ -35,8 +35,9 @@
   font-family: inherit;
   font-size: 13px;
   line-height: 1.2;
-  padding: 2px 6px;
-  border-radius: var(--fl-btn-radius, 6px);
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--fl-btn-radius, var(--radius));
 }
 
 .fl-icon-btn:hover:not(:disabled) {
@@ -118,7 +119,7 @@
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   cursor: pointer;
 }
@@ -134,7 +135,7 @@
 }
 
 .fl-palette-item.fl-kind-you {
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
 }
 
@@ -148,7 +149,7 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   color: var(--fl-ink-accent, var(--accent));
   background: rgba(var(--accent-rgb), 0.13);
 }
@@ -192,7 +193,7 @@
 .fl-inspector,
 .fl-section {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel-2);
   padding: 12px 14px;
   display: flex;
@@ -214,7 +215,7 @@
 .fl-inspector-head .fl-box-icon {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .fl-inspector-perch .fl-inspector-head .fl-box-icon {
@@ -270,7 +271,7 @@
 .fl-builtin-tag {
   font-size: 10.5px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 1px 7px;
   color: var(--muted);
 }
@@ -318,7 +319,7 @@
    dialog is already the top layer). */
 .fl-when-help {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   padding: 8px 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -377,7 +378,7 @@
   font-size: 12.5px;
   color: var(--fl-ink-muted, var(--muted));
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 
@@ -412,8 +413,8 @@
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  border-radius: 8px;
-  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  padding: var(--ctl-pad);
   font: inherit;
   font-size: 13px;
   cursor: pointer;

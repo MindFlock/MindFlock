@@ -9,7 +9,7 @@
   padding: 8px 9px;
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   line-height: 1.45;
   color: var(--text);
@@ -49,11 +49,12 @@
 
 .hint-action {
   margin-top: 6px;
-  padding: 3px 10px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   background: var(--accent);
   color: var(--accent-ink);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -67,7 +68,7 @@
   flex: none;
   background: none;
   border: 0;
-  padding: 0 2px;
+  padding: 0 4px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1;

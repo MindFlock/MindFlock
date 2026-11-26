@@ -21,7 +21,7 @@
 
 /* Dragging a file over a terminal: show where it will land (upload → path). */
 .file-drop {
-  border-radius: 6px;
+  border-radius: var(--radius);
   position: relative;
 }
 
@@ -37,7 +37,7 @@
   background: rgba(6, 7, 14, 0.55);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
-  border-radius: 6px;
+  border-radius: var(--radius);
   pointer-events: none;
 }
 
@@ -87,7 +87,7 @@
   position: absolute;
   inset: 3px;
   border: 2px dashed var(--accent);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .running-cover .rc-badge {
@@ -190,7 +190,7 @@
   padding: 4px 6px;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   font-size: 11px;
   color: var(--muted);
@@ -205,7 +205,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 
@@ -237,7 +237,7 @@
   color: var(--text);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -260,7 +260,7 @@
 
 .find-hl {
   position: absolute;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 215, 95, 0.42);
 }
 
@@ -292,7 +292,7 @@
   padding-right: 2px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .pane-find-field:focus-within {
@@ -313,7 +313,7 @@
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -337,7 +337,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .pane-find-count {

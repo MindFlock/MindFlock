@@ -10,7 +10,7 @@
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -48,8 +48,9 @@
 #peer-session-dialog .psv-say button {
   cursor: pointer;
   font-size: 12px;
-  padding: 4px 11px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -70,7 +71,8 @@
 #peer-session-dialog .psv-close {
   font-size: 15px;
   line-height: 1;
-  padding: 3px 9px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
 }
 
 #peer-session-dialog .psv-body {
@@ -131,10 +133,11 @@
   width: 100%;
   text-align: left;
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  padding: 2px 6px;
+  font-size: 12px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text);
   cursor: pointer;
@@ -217,7 +220,7 @@
   width: 100%;
   padding: 4px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: none;
   color: var(--text);
   font-size: 12px;

@@ -5,7 +5,7 @@
   background: var(--panel);
   border: 1px solid var(--border);
   border-top: 3px solid var(--tone-attention);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 18px 22px 20px;
   width: 520px;
   max-width: 92vw;
@@ -39,7 +39,7 @@
   min-width: 20px;
   height: 20px;
   padding: 0 5px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -54,7 +54,7 @@
   flex: none;
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--tone-attention);
   color: var(--tone-attention-ink);
   font-weight: 600;
@@ -74,8 +74,9 @@
   font: inherit;
   font-size: 15px;
   line-height: 1;
-  padding: 2px 7px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius);
   border: 1px solid transparent;
   background: none;
   color: var(--muted);
@@ -109,7 +110,7 @@
 .ask-cmd {
   margin: 0;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.4;
@@ -135,8 +136,9 @@
   text-align: left;
   font: inherit;
   font-size: 13px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -170,7 +172,7 @@
   flex: none;
   min-width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -204,7 +206,7 @@
   font-size: 13px;
   line-height: 1.4;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -237,7 +239,7 @@
   width: 30px;
   height: 28px;
   padding: 0;
-  border-radius: 7px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
@@ -306,7 +308,7 @@
 .ask-tab {
   font-size: 12px;
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   color: var(--muted);
 }
@@ -358,7 +360,7 @@
   flex: none;
   width: 14px;
   height: 14px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1.5px solid var(--muted);
   box-sizing: border-box;
 }
@@ -433,7 +435,7 @@
 /* The review reads as a confirmation: the answers, then the buttons. */
 .ask-select[data-stage="review"] .ask-review {
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }

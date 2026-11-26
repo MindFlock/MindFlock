@@ -1,6 +1,6 @@
 /* The Behaviors board (BehaviorsBoard.tsx), in the one look every Sky object
  * shares (the Finished strip's, LandingStrip.css; the reference is the
- * session frame): one hairline, radius 14px, a 30px faint title strip with
+ * session frame): one hairline, the large radius (--radius-lg), a 30px faint title strip with
  * the title in normal case and quiet `fl-icon-btn`s; a one-line explanation;
  * quiet rows grouped by tone, separated by hairlines. Tokens only: it reads
  * in the light and the dark theme alike (text in --text / --fl-ink-*). */
@@ -16,7 +16,7 @@
   max-height: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--muted) 4%, var(--panel));
   color: var(--text);
   font-size: 13px;
@@ -25,7 +25,7 @@
 
 /* The wrapper's ring (SkyObjects.css) hugs the frame's radius. */
 .sky-object-behaviors {
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
 }
 .sky-object-behaviors:where(:has(.sky-bh-bar:hover)) {
   outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
@@ -79,7 +79,8 @@
 }
 
 .sky-bh-tools .fl-icon-btn {
-  padding: 1px 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font-size: 12px;
 }
 
@@ -152,7 +153,7 @@
   gap: 8px;
   padding: 4px 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   font-size: 13px;
 }
@@ -238,7 +239,7 @@
   overflow-y: auto;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);

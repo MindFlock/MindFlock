@@ -53,7 +53,7 @@
   min-width: 220px;
   gap: 1px;
   padding: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
@@ -105,7 +105,7 @@
   min-width: 16px;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--muted);
   font-family: ui-monospace, Menlo, Consolas, monospace;

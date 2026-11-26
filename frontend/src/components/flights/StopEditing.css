@@ -14,7 +14,7 @@
   justify-content: center;
   width: 17px;
   height: 17px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--muted);
   background: var(--panel);
   color: var(--muted);
@@ -62,7 +62,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border-style: dashed;
   color: var(--muted);
   cursor: pointer;

@@ -305,9 +305,9 @@ describe("a device drop target", () => {
     expect(asked).not.toContain("Drop the route");
   });
 
-  it("the calm sky-object look (SKY_OBJECT_STYLE): one hairline, radius 14, a 30px bar, 13px / 600 title, muted 11.5px second line", () => {
+  it("the calm sky-object look (SKY_OBJECT_STYLE): one hairline, the large radius, a 30px bar, 13px / 600 title, muted 11.5px second line", () => {
     const c = cssOf("components/flights/DeviceBlocks.css");
-    expect(c).toMatch(/\.sky-device \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: 14px;/);
+    expect(c).toMatch(/\.sky-device \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: var\(--radius-lg\);/);
     expect(c).toMatch(/\.sky-device-bar \{[^}]*height: 30px;/);
     expect(c).toMatch(/\.sky-device-title \{[^}]*font-size: 13px;[^}]*font-weight: 600;/);
     expect(c).toMatch(/\.sky-device-sub \{[^}]*color: var\(--muted\);[^}]*font-size: 11\.5px;/);

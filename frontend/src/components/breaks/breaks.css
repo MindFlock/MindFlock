@@ -58,7 +58,7 @@
   width: min(460px, calc(100vw - 40px));
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 30px 28px 22px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
   text-align: center;
@@ -107,8 +107,9 @@
   cursor: pointer;
   font-family: inherit;
   font-size: 13px;
-  padding: 8px 16px;
-  border-radius: 8px;
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
@@ -165,7 +166,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 1px 4px;
   margin: 0 1px;
   font-size: 12px;

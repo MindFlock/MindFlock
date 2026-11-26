@@ -29,7 +29,7 @@
   inset: 3px;
   z-index: 60; /* over the card's own sticky head and its folds */
   border: 2px dashed var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(6, 7, 14, 0.62);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);

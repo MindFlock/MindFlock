@@ -145,8 +145,8 @@ describe("the lane wears the session frame's calm look (one Sky-object style)", 
   // all-caps INTAKE, blue-filled source cards, big bold titles, pill badges.
   const sheet = css("components/flights/IntakeLane.css");
 
-  it("a 14px-radius frame with one muted hairline; a 30px title bar in normal case with a muted count", () => {
-    expect(cssRule(sheet, ".sky-lane")).toMatch(/border: 1px solid var\(--lane-line\);[\s\S]*border-radius: 14px;[\s\S]*background: color-mix\(in srgb, var\(--muted\) 4%, var\(--panel\)\)/);
+  it("a large-radius frame with one muted hairline; a 30px title bar in normal case with a muted count", () => {
+    expect(cssRule(sheet, ".sky-lane")).toMatch(/border: 1px solid var\(--lane-line\);[\s\S]*border-radius: var\(--radius-lg\);[\s\S]*background: color-mix\(in srgb, var\(--muted\) 4%, var\(--panel\)\)/);
     expect(cssRule(sheet, ".sky-lane")).toContain("--lane-line: color-mix(in srgb, var(--muted) 30%, transparent)");
     const head = cssRule(sheet, ".sky-lane-head");
     expect(head).toMatch(/height: 30px;[\s\S]*border-bottom: 1px solid var\(--lane-hair\);[\s\S]*font-size: 13px;[\s\S]*font-weight: 600/);

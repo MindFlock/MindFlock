@@ -4,7 +4,7 @@
  * fainter hover ring (1px, half the accent) and the keyboard's ring (1px, the
  * accent) as the same outline; one shadow scale (`--sky-shadow-rest`,
  * `--sky-shadow-raised` while dragged), defined once; radii unified (lines
- * 10, boxes 8, chips 999); 120ms transitions on transform / box-shadow /
+ * --radius-lg, boxes --radius-md, chips --radius-pill); 120ms transitions on transform / box-shadow /
  * outline-color / opacity only, none under reduced motion; 40px touch
  * targets that never resize anything; the drop gap's ring readable far out.
  * Read as text: the node environment can't lay CSS out. */
@@ -142,20 +142,20 @@ describe("one ring", () => {
   });
 });
 
-describe("radii: lines 10, boxes 8, chips 999", () => {
+describe("radii: lines --radius-lg, boxes --radius-md, chips --radius-pill", () => {
   it("as the contract says", () => {
-    expect(cssRule(line, ".skl")).toContain("border-radius: 10px");
-    expect(cssRule(canvas, ".fl-box")).toContain("border-radius: 8px");
-    expect(cssRule(line, ".skl .fl-box:not(.fl-box-open)")).toContain("border-radius: 8px");
-    expect(cssRule(line, ".skl .fl-box.fl-box-branch:not(.fl-box-open)")).toContain("border-radius: 8px");
-    expect(cssRule(grounded, ".skl-grounded-head")).toContain("border-radius: 8px");
-    expect(cssRule(objects, ".sky-block")).toContain("border-radius: 8px");
-    expect(cssRule(objects, ".sky-object")).toContain("border-radius: 8px");
-    expect(cssRule(note, ".sky-note")).toContain("border-radius: 8px");
-    expect(cssRule(lane, ".sky-lane-block")).toContain("border-radius: 8px");
-    expect(cssRule(palette, ".sky-palette")).toContain("border-radius: 10px");
-    expect(cssRule(shelf, ".sky-stop-chip")).toContain("border-radius: 999px");
-    expect(cssRule(canvas, ".fl-box-chip")).toContain("border-radius: 999px");
+    expect(cssRule(line, ".skl")).toContain("border-radius: var(--radius-lg)");
+    expect(cssRule(canvas, ".fl-box")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(line, ".skl .fl-box:not(.fl-box-open)")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(line, ".skl .fl-box.fl-box-branch:not(.fl-box-open)")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(grounded, ".skl-grounded-head")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(objects, ".sky-block")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(objects, ".sky-object")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(note, ".sky-note")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(lane, ".sky-lane-block")).toContain("border-radius: var(--radius-md)");
+    expect(cssRule(palette, ".sky-palette")).toContain("border-radius: var(--radius-lg)");
+    expect(cssRule(shelf, ".sky-stop-chip")).toContain("border-radius: var(--radius-pill)");
+    expect(cssRule(canvas, ".fl-box-chip")).toContain("border-radius: var(--radius-pill)");
   });
 });
 

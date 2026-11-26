@@ -77,7 +77,7 @@
 
 .gh-push-fix code {
   padding: 3px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   background: var(--panel-2, rgba(127, 127, 127, 0.14));
 }
@@ -107,8 +107,9 @@
   border: 1px solid var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 6px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   cursor: pointer;
 }
 

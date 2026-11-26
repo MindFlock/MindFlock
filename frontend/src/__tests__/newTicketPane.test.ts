@@ -53,7 +53,7 @@ describe("the card: every pane shares a fixed top edge", () => {
     expect(ALL_CSS).not.toContain("--nf-card-h");
     expect(ALL_CODE).not.toContain("nf-ask");
     expect(squash(CSS)).toContain(
-      "#new-ticket-form { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; " +
+      "#new-ticket-form { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); " +
         "padding: 20px 22px; width: min(660px, 94vw); height: auto;"
     );
     // The base rule overrides nothing of .modal's.

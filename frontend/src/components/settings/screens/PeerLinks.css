@@ -148,7 +148,7 @@
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
 }
 .peer-joint[data-joint-phase="none"],
@@ -212,7 +212,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
@@ -243,7 +243,7 @@
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   min-width: 0;
 }
@@ -272,7 +272,7 @@
   overflow: auto;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   font-size: 12.5px;
   line-height: 1.45;
@@ -302,7 +302,7 @@
 .peer-md pre {
   margin: 4px 0;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   font: 11.5px ui-monospace, Menlo, Consolas, monospace;
   white-space: pre-wrap;
@@ -331,7 +331,7 @@
   gap: 6px;
   padding: 8px 10px;
   border-left: 3px solid var(--gold);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
   background: var(--panel);
 }
 
@@ -339,7 +339,7 @@
   margin: 0;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel-2);
   font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
   white-space: pre-wrap;
@@ -399,7 +399,7 @@
 .peer-verdict {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--tone-neutral);
   color: var(--tone-neutral-ink);
 }
@@ -473,7 +473,7 @@
 #peer-guests-pick-form {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   width: 460px;
   max-width: 92vw;
@@ -503,7 +503,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 9px 12px;
   font-size: 13px;
 }
@@ -551,7 +551,7 @@
   line-height: 1.45;
   margin: 8px 0 6px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border));
   background: color-mix(in srgb, var(--red) 10%, transparent);
   color: var(--text);
@@ -574,7 +574,7 @@
 #peer-sessions-share-form {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   width: 500px;
   max-width: 92vw;
@@ -603,7 +603,7 @@
 #peer-invite-pick-form {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   width: 500px;
   max-width: 92vw;

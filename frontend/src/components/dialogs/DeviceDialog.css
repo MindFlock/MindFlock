@@ -42,7 +42,7 @@
   margin-left: auto;
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 1px 7px;
   font-size: 10px;
   text-transform: none;
@@ -69,7 +69,7 @@
   color: var(--muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 0 2px;
+  padding: 0 4px;
 }
 
 .device-group .dev-forget:hover {
@@ -89,7 +89,7 @@
   background: var(--accent, #7d56f4);
   color: #fff;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 3px 10px;
   font-size: 11px;
   cursor: pointer;
@@ -103,7 +103,7 @@
 #device-form {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 22px;
   width: 420px;
   max-width: 92vw;
@@ -135,7 +135,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   font-size: 14px;
 }

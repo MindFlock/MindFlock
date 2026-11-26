@@ -16,7 +16,7 @@
   background: var(--panel);
   color: var(--text);
   border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
@@ -38,7 +38,7 @@
   margin: 0 -14px 2px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: color-mix(in srgb, var(--accent) 7%, var(--panel));
   font-size: 12.5px;
   user-select: none;
@@ -66,7 +66,7 @@
   height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--fl-btn-radius, 6px);
+  border-radius: var(--fl-btn-radius, var(--radius));
   background: transparent;
   color: var(--fl-ink-muted, var(--muted));
   font-family: inherit;
@@ -100,7 +100,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 7px 9px;
   font-size: 12.5px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -179,7 +179,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 6px 9px;
   font-size: 12.5px;
   font-family: inherit;
