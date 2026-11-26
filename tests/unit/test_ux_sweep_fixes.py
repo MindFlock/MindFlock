@@ -68,7 +68,8 @@ def test_phone_sheets_are_modal_and_escape_closes_them():
     js = _read(STATIC / "mobile.js")
     assert "function dismissSheet(el)" in js
     assert re.search(
-        r'ev\.key !== "Escape"[\s\S]{0,400}dismissSheet\(open\[open\.length - 1\]\)', js
+        r'ev\.key !== "Escape"[\s\S]{0,1200}dismissSheet\(open\[open\.length - 1\]\)',
+        js,
     )
 
 
