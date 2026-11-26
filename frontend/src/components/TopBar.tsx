@@ -479,7 +479,7 @@ export function TopBar() {
             data-fold="settings"
             type="button"
             title="Settings"
-            aria-label="Open settings"
+            aria-label="Open Settings"
             onClick={() => openSettings()}
           >
             Settings

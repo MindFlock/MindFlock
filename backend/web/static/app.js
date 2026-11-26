@@ -44290,6 +44290,7 @@ function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen, childr
 							type: "button",
 							className: "fa-open ghost",
 							title: "Open its pane",
+							"aria-label": "Open its pane",
 							onClick: () => onOpen(),
 							children: variant === "thread" ? "Open ↗" : "↗"
 						})
@@ -44335,6 +44336,7 @@ function AskedInWordsView({ question, variant, onReply, onOpen, asking = "questi
 						type: "button",
 						className: "fa-open ghost",
 						title: "Open its pane",
+						"aria-label": "Open its pane",
 						onClick: () => onOpen(),
 						children: variant === "thread" ? "Open ↗" : "↗"
 					})
@@ -48724,6 +48726,7 @@ function NotificationsBell() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "notif-settings",
 						type: "button",
+						"aria-label": "Notification settings",
 						title: "Notification settings — desktop notifications and which events notify",
 						onClick: () => {
 							setOpen(false);
@@ -65594,7 +65597,7 @@ function TopBar() {
 							"data-fold": "settings",
 							type: "button",
 							title: "Settings",
-							"aria-label": "Open settings",
+							"aria-label": "Open Settings",
 							onClick: () => openSettings(),
 							children: "Settings"
 						}),
@@ -111582,6 +111585,7 @@ function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) 
 									type: "button",
 									className: "prompt-pin-mark",
 									"aria-expanded": pinOpen,
+									"aria-label": pinOpen ? "Collapse the prompt to one line" : "Show the whole prompt",
 									title: pinOpen ? "Collapse to one line" : "Show the whole prompt",
 									onClick: (e) => {
 										e.stopPropagation();

@@ -4246,13 +4246,31 @@
   });
   askCancelBtn.addEventListener("click", closeAsk);
   // Tap the dimmed backdrop to dismiss, like the commit and new sheets.
-  [sessionsSheet, actSheet, recentSheet, askSheetEl].forEach(function (el) {
+  // Escape does the same for the topmost open one (a phone with a keyboard,
+  // an iPad, a screen reader's dismiss gesture); before, it did nothing.
+  var dismissable = [sessionsSheet, actSheet, recentSheet, askSheetEl];
+  function dismissSheet(el) {
+    if (el === actSheet) { if (actSettled()) closeActSheet(); }
+    else if (el === askSheetEl) closeAsk();
+    else closeSheet(el);
+  }
+  dismissable.forEach(function (el) {
     el.addEventListener("click", function (ev) {
-      if (ev.target !== el) return;
-      if (el === actSheet) { if (actSettled()) closeActSheet(); }
-      else if (el === askSheetEl) closeAsk();
-      else closeSheet(el);
+      if (ev.target === el) dismissSheet(el);
     });
+  });
+  document.getElementById("sessions-done").addEventListener("click", function () { closeSheet(sessionsSheet); });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape" || ev.defaultPrevented) return;
+    if (typeof ask !== "undefined" && ask.open) return;  // the asking sheet's own Escape (Later)
+    var open = dismissable.filter(function (el) { return !el.classList.contains("hidden"); });
+    if (!open.length) return;
+    // The last one in the page is drawn on top.
+    open.sort(function (a, b) {
+      return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    });
+    ev.preventDefault();
+    dismissSheet(open[open.length - 1]);
   });
 
   // --- wiring --------------------------------------------------------------
