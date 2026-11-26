@@ -61,7 +61,7 @@
   gap: 4px 8px;
   padding: 5px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12.5px;
 }
 
@@ -89,7 +89,7 @@
   align-self: start;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 10.5px;
   line-height: 1.6;
   color: var(--muted);
@@ -131,7 +131,8 @@
 }
 
 .peer-joint-check .peer-joint-answer-btn {
-  padding: 1px 7px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font-size: 11px;
 }
 
@@ -160,7 +161,7 @@
   font-size: 12.5px;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
   resize: vertical;

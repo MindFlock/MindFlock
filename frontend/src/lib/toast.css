@@ -23,7 +23,7 @@
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   z-index: 1000;
   opacity: 0;
@@ -39,7 +39,7 @@
   flex: none;
   padding: 3px 10px;
   border: 1px solid rgba(var(--accent-rgb), 0.55);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: rgba(var(--accent-rgb), 0.14);
   color: var(--text);
   font: inherit;

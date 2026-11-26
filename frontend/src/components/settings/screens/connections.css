@@ -34,7 +34,7 @@
 .conn-badge {
   font-size: 10.5px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 7px;
   color: var(--muted);
 }
@@ -62,7 +62,7 @@
   overflow-x: auto;
   white-space: nowrap;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   border: 1px solid var(--border);
 }

@@ -62,7 +62,7 @@
 /* A section "Open map" landed on: a brief outline, then calm. */
 .cm-sec.cm-sec-flash {
   animation: cm-sec-flash 1.6s ease-out 1;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 @keyframes cm-sec-flash {

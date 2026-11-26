@@ -15,7 +15,7 @@
   min-width: 0;
   font-size: 12px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -32,9 +32,10 @@
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 11px;
-  padding: 4px 7px;
+  padding: 3px 7px;
+  min-height: var(--ctl-h-sm);
 }
 
 #session-filter-clear:hover {

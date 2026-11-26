@@ -92,7 +92,7 @@
   background: none;
   border: none;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: pointer;
   font: inherit;
@@ -123,8 +123,9 @@
   cursor: pointer;
   font-size: 11px;
   font-family: inherit;
-  padding: 3px 9px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -170,14 +171,15 @@
   display: inline-flex;
   flex: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   overflow: hidden;
   font-size: 11px;
 }
 
 .cm-seg .lab,
 .cm-seg button {
-  padding: 3px 8px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   color: var(--muted);
   background: transparent;
   border: none;
@@ -255,7 +257,7 @@
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 26px 4px 8px;
   color: var(--text);
   font-size: 11.5px;
@@ -283,7 +285,7 @@
   font-size: 10px;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
   pointer-events: none;
 }
@@ -301,7 +303,7 @@
   padding: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
 }
 
@@ -310,7 +312,7 @@
   align-items: center;
   gap: 7px;
   padding: 4px 7px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font: 11.5px/1.45 var(--cm-mono);
   min-width: 0;
@@ -331,7 +333,7 @@
   font-size: 9px;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 3px;
 }
 
@@ -362,7 +364,7 @@
   gap: 6px;
   font-size: 11px;
   padding: 3px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   color: var(--muted);
   white-space: nowrap;
@@ -444,7 +446,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 8px;
   font-size: 12px;
   min-width: 0;
@@ -483,9 +485,10 @@
 }
 
 .cm-add .cm-chip {
-  font-size: 10.5px;
-  padding: 1px 8px;
-  border-radius: 10px;
+  font-size: 11px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius-lg);
   color: var(--muted);
 }
 
@@ -655,7 +658,7 @@
 .ct-card {
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
   font-size: 11.5px;
@@ -723,7 +726,7 @@
 .ct-close {
   background: none;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: pointer;
   font-size: 14px;
@@ -777,7 +780,7 @@
   font-size: 10px;
   padding: 0 7px;
   line-height: 16px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   color: var(--muted);
 }
@@ -1015,7 +1018,7 @@
   width: 100%;
   padding: 2px 6px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: none;
   font: inherit;
   font-size: 11.5px;
@@ -1107,7 +1110,7 @@
 .ct-facts span {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 0 7px;
   font-size: 11px;
   line-height: 18px;
@@ -1147,7 +1150,7 @@
   font: 11px var(--cm-mono);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 0 6px;
   line-height: 18px;
   color: var(--text);
@@ -1198,7 +1201,7 @@ button.ct-chip:hover {
   max-width: 300px;
   background: color-mix(in srgb, var(--panel) 96%, transparent);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 5px 8px;
   font-size: 11.5px;
   line-height: 1.35;
@@ -1238,7 +1241,7 @@ button.ct-chip:hover {
   max-width: calc(100% - 24px);
   background: color-mix(in srgb, var(--red) 10%, var(--panel));
   border: 1px solid var(--red);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 4px 10px;
   font-size: 11.5px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
@@ -1254,7 +1257,7 @@ button.ct-chip:hover {
   font: 10.5px var(--cm-mono);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 
@@ -1275,7 +1278,7 @@ button.ct-chip:hover {
   padding: 6px 6px 6px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
   font-size: 12px;
 }
@@ -1304,7 +1307,7 @@ button.ct-chip:hover {
   padding: 14px 20px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   font-size: 12.5px;
   min-width: 220px;
   text-align: center;
@@ -1315,7 +1318,7 @@ button.ct-chip:hover {
   display: block;
   width: 180px;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   overflow: hidden;
 }
@@ -1353,7 +1356,7 @@ button.ct-chip:hover {
   color: var(--muted);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   padding: 0 8px;
   line-height: 18px;
 }
@@ -1547,7 +1550,7 @@ button.ct-chip:hover {
   flex: none;
   width: 14px;
   height: 14px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   display: inline-grid;
   place-items: center;
   font: 700 9px/1 var(--cm-mono);
@@ -1591,7 +1594,7 @@ button.ct-chip:hover {
   transform: translateX(-50%);
   max-width: calc(100% - 20px);
   padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--muted);
@@ -1693,7 +1696,7 @@ button.ct-chip:hover {
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 3px 6px;
   color: var(--text);
   cursor: pointer;
@@ -1787,11 +1790,11 @@ button.ct-chip:hover {
   align-self: center;
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--muted);
   cursor: pointer;
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   padding: 2px 6px;
   white-space: nowrap;
 }
@@ -1834,7 +1837,7 @@ button.ct-chip:hover {
   font-size: 9.5px;
   font-weight: 600;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   color: var(--muted);
   white-space: nowrap;
@@ -1865,7 +1868,7 @@ button.ct-chip:hover {
   width: 10px;
   height: 10px;
   border: 1.5px solid var(--red);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   align-self: center;
   background: repeating-linear-gradient(
     -45deg,
@@ -1920,7 +1923,8 @@ button.ct-chip:hover {
 
 .cm-actions button {
   color: var(--text);
-  padding: 4px 11px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
 }
 
 .cm-actions button.cm-primary {
@@ -2080,7 +2084,8 @@ button.ct-chip:hover {
 .stagechip.rzchip {
   cursor: pointer;
   font-size: 10px;
-  padding: 1px 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   border: none;
   font-family: inherit;
   line-height: inherit;
@@ -2118,7 +2123,7 @@ button.ct-chip:hover {
   gap: 0;
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
   padding: 6px 0 4px;
   font-size: 11.5px;
@@ -2171,13 +2176,13 @@ button.ct-chip:hover {
   flex: none;
   min-width: 20px;
   height: 20px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
   font: 600 11px/1 inherit;
   cursor: pointer;
-  padding: 0 5px;
+  padding: 0 6px;
 }
 
 .ct-bix-q:hover,
@@ -2261,7 +2266,7 @@ button.ct-chip:hover {
   width: 18px;
   height: 18px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--muted);
   cursor: pointer;
@@ -2324,8 +2329,8 @@ button.ct-chip:hover {
   width: 100%;
   background: none;
   border: none;
-  border-radius: 5px;
-  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  padding: var(--ctl-pad-xs);
   font: inherit;
   font-size: 11px;
   color: var(--text);
@@ -2388,8 +2393,8 @@ button.ct-chip:hover {
   width: 100%;
   background: none;
   border: none;
-  border-radius: 4px;
-  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+  padding: var(--ctl-pad-xs);
   font: inherit;
   font-size: 11px;
   color: var(--text);
@@ -2455,7 +2460,7 @@ button.ct-chip:hover {
   padding: 4px 0;
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
   font-size: 11px;
   max-height: calc(100% - 16px);
@@ -2488,7 +2493,7 @@ button.ct-chip:hover {
 
 .ct-rail-row.sub {
   padding-left: 13px;
-  font-size: 10.5px;
+  font-size: 11px;
   border-left-style: dashed;
 }
 
@@ -2616,13 +2621,13 @@ button.ct-chip:hover {
 .ct-bix-risk-tog {
   flex: none;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   color: var(--muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 16px;
-  padding: 0 7px;
+  padding: 0 8px;
   cursor: pointer;
 }
 
@@ -2652,7 +2657,7 @@ button.ct-chip:hover {
   margin: 5px 0 3px;
   padding: 3px 7px 4px;
   border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--border));
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--gold) 6%, transparent);
   font: inherit;
   font-size: 11px;
@@ -2711,8 +2716,9 @@ button.ct-chip:hover {
   width: 100%;
   background: none;
   border: none;
-  border-radius: 4px;
-  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font: inherit;
   font-size: 11px;
   color: var(--text);
@@ -2733,7 +2739,7 @@ button.ct-chip:hover {
 
 .ct-bix-ranked .bar {
   height: 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   overflow: hidden;
 }
@@ -2773,10 +2779,11 @@ button.ct-chip:hover {
   gap: 5px;
   background: none;
   border: none;
-  border-radius: 4px;
-  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text);
   text-align: left;
   cursor: pointer;
@@ -2817,7 +2824,7 @@ button.ct-chip:hover {
   width: 22px;
   height: 20px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--muted);
   font: inherit;
@@ -2907,11 +2914,11 @@ button.ct-chip:hover {
   display: block;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel-2);
   color: var(--muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   padding: 2px 5px;
   text-align: left;
   cursor: pointer;
@@ -3019,9 +3026,9 @@ button.ct-chip:hover {
   font: inherit;
   font-size: 11px;
   font-family: var(--mono, ui-monospace, monospace);
-  padding: 0 5px;
+  padding: 0 6px;
   margin: 2px 4px 0 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: none;
   cursor: pointer;
@@ -3119,7 +3126,7 @@ button.ct-chip:hover {
 .mt-ring {
   position: absolute;
   border: 2px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
     0 0 0 9999px rgba(0, 0, 0, 0.28);
@@ -3136,7 +3143,7 @@ button.ct-chip:hover {
   pointer-events: auto;
   background: var(--panel);
   border: 1px solid var(--accent);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px 10px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
   color: var(--text);
@@ -3200,7 +3207,7 @@ button.ct-chip:hover {
   font: 600 10.5px/1 var(--cm-mono);
   padding: 1px 4px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
 }
 

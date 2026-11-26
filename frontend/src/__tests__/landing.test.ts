@@ -135,11 +135,11 @@ describe("the strip", () => {
     expect(code("components/flights/LandingStrip.tsx")).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(/);
   });
 
-  it("the CSS: the dot's tones; the calm sky-object frame (SKY_OBJECT_STYLE: one hairline, radius 14, a 30px bar, 13px / 600 normal-case title)", () => {
+  it("the CSS: the dot's tones; the calm sky-object frame (SKY_OBJECT_STYLE: one hairline, the large radius, a 30px bar, 13px / 600 normal-case title)", () => {
     const c = cssOf("components/flights/LandingStrip.css");
     expect(c).toMatch(/\.sky-landing-dot\.is-green \{[^}]*background: var\(--ok/);
     expect(c).toMatch(/\.sky-landing-dot\.is-red \{[^}]*background: var\(--danger/);
-    expect(c).toMatch(/\.sky-landing \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: 14px;[^}]*background: color-mix\(in srgb, var\(--muted\) 4%, var\(--panel\)\);/);
+    expect(c).toMatch(/\.sky-landing \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: var\(--radius-lg\);[^}]*background: color-mix\(in srgb, var\(--muted\) 4%, var\(--panel\)\);/);
     expect(c).toMatch(/\.sky-landing-bar \{[^}]*height: 30px;[^}]*border-bottom: 1px solid/);
     expect(c).toMatch(/\.sky-landing-title \{[^}]*font-size: 13px;[^}]*font-weight: 600;/);
     expect(c).not.toMatch(/text-transform: uppercase|letter-spacing/);

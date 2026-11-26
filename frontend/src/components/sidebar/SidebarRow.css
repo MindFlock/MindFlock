@@ -8,7 +8,7 @@
   left: 6px;
   right: 6px;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
   pointer-events: none;
@@ -43,7 +43,7 @@
      .inst .grip) so it costs the row no width, and this keeps it from landing
      on top of the Alt+N number when it fades in. */
   padding: 9px 8px 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   /* Anchors the grip to THIS row rather than to .inst, which also contains the
      expanded actions menu (the grip would stretch down the whole card). */
@@ -294,7 +294,7 @@
   margin: 0 -3px 0 -2px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--muted);
   cursor: pointer;
@@ -422,7 +422,7 @@
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 
@@ -616,7 +616,7 @@
 .inst .lineage.workers:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 /* A lane line that is waiting on you ("! hooks failed twice", "approve?")
@@ -634,7 +634,7 @@
 .inst .lineage.opens-bell:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .inst .lineage .needs {
@@ -688,8 +688,9 @@
   color: var(--muted);
   cursor: pointer;
   font-size: 14px;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 0 6px;
+  min-height: var(--ctl-h-xs);
+  border-radius: var(--radius-sm);
   flex: none;
 }
 
@@ -712,7 +713,7 @@
   padding: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
@@ -724,7 +725,7 @@
   gap: 6px;
   margin: 2px 8px 4px 28px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   border-left: 3px solid var(--yellow, #d6a53c);
   background: var(--panel-2);
@@ -809,8 +810,9 @@
   flex: 1;
   cursor: pointer;
   font-size: 11px;
-  padding: 4px 0;
-  border-radius: 6px;
+  padding: 3px 0;
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -852,7 +854,7 @@
   flex: none;
   padding: 0 4px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: none;
   font: inherit;
   font-size: 10px;
@@ -888,7 +890,8 @@
 .stagechip.peerchip {
   cursor: pointer;
   font-size: 10px;
-  padding: 1px 6px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   border: none;
   font-family: inherit;
   line-height: inherit;
@@ -995,7 +998,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 .job-menu .job-expect-custom input:focus {
   outline: none;
@@ -1006,7 +1009,8 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 .session-menu.job-menu .job-expect-custom .job-expect-set {
   flex: none;
-  padding: 3px 10px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   border: 1px solid var(--border);
   background: var(--panel-2);
 }
@@ -1107,7 +1111,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   gap: 6px;
   margin: 2px 8px 4px 28px;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel-2);
   border: 1px solid var(--border);
   font-size: 12px;
@@ -1124,11 +1128,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 }
 
 .inst-tail .close-confirm .del-acts button {
-  padding: 4px 10px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -1150,11 +1155,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border: 1px solid rgba(var(--accent-rgb), 0.6);
   background: rgba(var(--accent-rgb), 0.18);
   color: var(--text);
-  border-radius: 999px;
-  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  padding: 0 8px;
   height: 16px;
   line-height: 14px;
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 600;
   max-width: 90px;
   overflow: hidden;
@@ -1166,7 +1171,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   background: rgba(var(--accent-rgb), 0.3);
 }
 .inst .guest-pill.guest-pill-chat {
-  padding: 0 5px;
+  padding: 0 6px;
   font-size: 10px;
   background: transparent;
 }
@@ -1179,7 +1184,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   margin: 4px 8px 2px;
   padding: 4px 8px;
   font-size: 11px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--fg-muted, #9aa);
   background: var(--panel-2, rgba(255, 255, 255, 0.05));
 }

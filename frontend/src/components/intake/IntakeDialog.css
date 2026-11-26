@@ -17,7 +17,7 @@
      (.modal.top-dialog, Modal.css) — never set here. */
   min-height: min(420px, var(--dlg-max-h));
   padding: 18px 22px 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
@@ -64,7 +64,8 @@
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--muted);
-  padding: 6px 11px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
   margin-bottom: -1px;
   font-size: 13px;
   font-family: inherit;
@@ -86,7 +87,7 @@
 .ik-tab-count {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 1px 7px;
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
@@ -180,7 +181,7 @@
   gap: 14px;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   padding: 11px 14px;
 }
 
@@ -230,13 +231,13 @@
    a hover fill and a caret that turns; the source additionally gets a filled
    band, because it is a section header as well as a control. */
 .ik-groups .tk-bucket-head {
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 0 6px 0 4px;
 }
 
 .ik-groups .tk-bucket-toggle {
   padding: 6px 2px;
-  border-radius: 7px;
+  border-radius: var(--radius);
 }
 
 .ik-groups .tk-bucket-head:hover {
@@ -393,7 +394,7 @@
 .ik-item-start .ik-start-again {
   font-size: 11px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   white-space: nowrap;
   /* Same hug-and-right-align as the primary button above, so a row with a
      leftover workspace doesn't suddenly have a full-width secondary control. */
@@ -409,7 +410,7 @@
 .ik-item-start .ik-item-agent {
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -477,7 +478,7 @@
 .ik-item-start .ik-item-depth {
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -492,7 +493,7 @@
 .ik-item-start .ik-item-effort {
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -511,7 +512,7 @@
 .ik-item-start .ik-item-repo {
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -569,7 +570,7 @@
 .pr-open-toolbar select.tk-mine-filter {
   font-size: 12px;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -692,8 +693,9 @@
    nobody can find. */
 .ik-item-start .ik-merge-btn {
   font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   white-space: nowrap;
   align-self: flex-end;
   cursor: pointer;
@@ -751,7 +753,7 @@
 .ik-merge .ik-merge-target {
   font-size: 11px;
   padding: 3px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -797,8 +799,9 @@
 
 .ik-merge .ik-merge-go {
   font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   white-space: nowrap;
 }
 
@@ -846,17 +849,18 @@
   margin-top: 8px;
   padding: 8px 12px;
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.25);
   font-size: 13px;
 }
 
 .ik-pickbar .ik-pick-go {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 4px 12px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
@@ -874,7 +878,7 @@
 .ik-source-pill {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
@@ -938,10 +942,11 @@
   flex: none;
   font: inherit;
   font-size: 12px;
-  padding: 2px 8px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--muted);
   cursor: pointer;
 }
@@ -1022,7 +1027,7 @@
 #intake-panel .tk-advanced > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 #intake-panel .tk-advanced-body {
@@ -1065,7 +1070,7 @@
   font-size: 12.5px;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   padding: 7px 12px;
 }
 .ik-autostart-text {
@@ -1152,7 +1157,7 @@
   color: var(--muted);
   text-decoration: none;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 .ik-item-start .ik-row-more-btn.on,
 .ik-item-start .ik-row-more-btn:hover {
@@ -1261,7 +1266,7 @@
   border: 0;
   padding: 3px 4px;
   margin-left: -2px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font: inherit;
   font-size: 11px;
   color: var(--muted);
@@ -1289,9 +1294,10 @@
   flex: none;
   font: inherit;
   font-size: 12px;
-  padding: 3px 10px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   margin: 3px 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -1327,7 +1333,7 @@
 .ik-editor {
   border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
   border-top: none;
-  border-radius: 0 0 9px 9px;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: var(--panel);
   padding: 14px 16px 12px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
@@ -1499,7 +1505,7 @@
   font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
 }
 .ik-uses-hint {
@@ -1511,8 +1517,9 @@
 .ik-arm {
   font: inherit;
   font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 6px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -1536,8 +1543,9 @@
 .ik-quiet-btn {
   font: inherit;
   font-size: 12px;
-  padding: 4px 9px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -1578,7 +1586,7 @@
 .ik-ghline.off {
   border: 1px solid color-mix(in srgb, var(--gold) 50%, var(--border));
   background: color-mix(in srgb, var(--gold) 8%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 6px 8px 6px 10px;
   color: var(--text);
 }
@@ -1614,7 +1622,7 @@
 }
 .ik-add {
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   background: var(--panel);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
@@ -1704,10 +1712,10 @@
   min-height: 50px;
   padding: 7px 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
   text-align: center;
 }
@@ -1819,7 +1827,7 @@
   font-size: 12.5px;
   padding: 6px 28px 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
   white-space: nowrap;
@@ -1852,7 +1860,7 @@
   overflow: auto;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
   padding: 10px 12px;
   display: flex;
@@ -1977,7 +1985,7 @@
   color: var(--muted);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   padding: 8px 14px;
 }
 .ik-autostart-link strong {
@@ -1991,7 +1999,7 @@
 /* The empty GitHub PRs / issues tab: Connect → Pick a repo → Turn on. */
 .ik-setup-card {
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   background: var(--panel);
   flex: none;
@@ -2041,11 +2049,11 @@
   align-items: center;
   gap: 6px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 3px 10px 3px 4px;
   cursor: pointer;
 }
@@ -2142,7 +2150,7 @@
 }
 
 .fl-source-reach .fl-reach-edit {
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -2163,7 +2171,7 @@
   margin: 0;
   padding: 10px 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .vf-live-env > legend {
   padding: 0 4px;

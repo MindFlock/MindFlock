@@ -36,7 +36,7 @@
   box-sizing: border-box;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
   padding: 6px;
   font-size: 12.5px;
@@ -96,7 +96,7 @@
   grid-template-columns: 1fr auto;
   gap: 1px 10px;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -179,7 +179,7 @@
   margin: 6px 4px 4px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(var(--accent-rgb), 0.08);
 }
 

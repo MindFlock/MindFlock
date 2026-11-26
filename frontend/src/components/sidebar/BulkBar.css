@@ -31,8 +31,9 @@
 .bulk-acts button {
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 7px;
-  border-radius: 5px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
@@ -57,7 +58,7 @@
   top: 0;
   z-index: 3;
   border: 1px solid var(--accent);
-  border-radius: 7px;
+  border-radius: var(--radius);
   margin: 0 6px 4px;
 }
 
@@ -104,7 +105,7 @@
   gap: 6px;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
 }
 
@@ -125,7 +126,7 @@
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--yellow, #d6a53c);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   white-space: normal;
   overflow-wrap: anywhere;
@@ -168,8 +169,9 @@
 #offline-bar .ob-btn {
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 5px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
@@ -212,9 +214,10 @@
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  padding: 2px 5px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
@@ -254,8 +257,9 @@
 #memory-wait-bar .ob-btn {
   cursor: pointer;
   font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 5px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);

@@ -11,7 +11,7 @@
   max-width: 260px;
   gap: 1px;
   padding: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
@@ -27,7 +27,7 @@
   width: 100%;
   padding: 5px 9px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text);
   font-family: inherit;

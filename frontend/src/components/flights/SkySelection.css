@@ -15,7 +15,7 @@
   z-index: 6;
   box-sizing: border-box;
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--accent-rgb), 0.12);
   pointer-events: none;
 }
@@ -63,7 +63,7 @@
   max-width: min(460px, calc(100% - 16px));
   padding: 6px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--sky-shadow-raised);

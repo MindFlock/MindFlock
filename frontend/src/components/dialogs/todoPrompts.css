@@ -30,7 +30,7 @@
   font-size: 12px;
   padding: 3px 6px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
 }
@@ -82,7 +82,7 @@
   display: flex;
   align-items: center;
   padding: 8px 11px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -112,7 +112,7 @@
   font-size: 14px;
   line-height: 1;
   padding: 0 11px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .prompt-card-expand:hover {
@@ -146,7 +146,7 @@
   word-break: break-word;
   background: var(--panel);
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
@@ -168,7 +168,7 @@
   padding: 8px 10px;
   font-family: inherit;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
   resize: vertical;
@@ -184,8 +184,9 @@
   align-self: flex-end;
   cursor: pointer;
   font-size: 12px;
-  padding: 8px 16px;
-  border-radius: 7px;
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -205,6 +206,6 @@
 
 .inst {
   margin-bottom: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   position: relative;
 }

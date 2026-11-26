@@ -152,7 +152,7 @@ describe("the sidebar's View row: Auto 1 2 4 9 │ Grid Sky", () => {
 
   it("styles: the .vm family, the accent fill when active, words drop on a narrow row", () => {
     const s = css("components/sidebar/Sidebar.css");
-    expect(s).toMatch(/#view-modes \.vt \{[^}]*border-radius: 6px;[^}]*font-size: 11px|#view-modes \.vt \{[^}]*font-size: 11px;[^}]*border-radius: 6px;/);
+    expect(s).toMatch(/#view-modes \.vt \{[^}]*border-radius: var\(--radius\);[^}]*font-size: 11px|#view-modes \.vt \{[^}]*font-size: 11px;[^}]*border-radius: var\(--radius\);/);
     expect(s).toMatch(/#view-modes \.vt\.active \{[^}]*background: var\(--accent\);/);
     expect(s).toMatch(/#view-modes \.vm-nums \{[^}]*border-right: 1px solid var\(--border\);/);
     expect(s).toMatch(/#view-modes \{\s*container: view-row \/ inline-size;/);

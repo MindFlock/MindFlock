@@ -436,7 +436,7 @@ describe("the stylesheets", () => {
   const sheet = css("components/flights/Flights.css");
   const canvas = css("components/flights/FlywayCanvas.css");
   it("a perch is gold and rounder, the current box pulses, a halted one is red", () => {
-    expect(canvas).toMatch(/\.fl-perch \{[^}]*border-radius: 18px;[^}]*var\(--tone-attention\)/);
+    expect(canvas).toMatch(/\.fl-perch \{[^}]*border-radius: var\(--radius-xl\);[^}]*var\(--tone-attention\)/);
     expect(canvas).toMatch(/\.fl-st-perched \{[^}]*var\(--tone-attention\)/);
     expect(canvas).toMatch(/\.fl-st-current \{[^}]*var\(--tone-working\)/);
     expect(canvas).toMatch(/\.fl-st-halted,\s*\.fl-st-failed \{[^}]*var\(--red\)/);
@@ -450,7 +450,7 @@ describe("the stylesheets", () => {
   });
 
   it("Flights' fields are the New dialog's: its border, radius, background and focus ring", () => {
-    expect(canvas).toMatch(/\.fl-input\.fl-input,\s*\.fl-prompt\.fl-prompt \{[^}]*background: var\(--bg\);[^}]*border: 1px solid var\(--border\);[^}]*border-radius: 7px;/);
+    expect(canvas).toMatch(/\.fl-input\.fl-input,\s*\.fl-prompt\.fl-prompt \{[^}]*background: var\(--bg\);[^}]*border: 1px solid var\(--border\);[^}]*border-radius: var\(--radius\);/);
     expect(canvas).toMatch(/\.fl-input\.fl-input:focus,\s*\.fl-prompt\.fl-prompt:focus \{[^}]*border-color: var\(--accent\)/);
   });
 
@@ -465,7 +465,7 @@ describe("round 16: the Loop's arc in the stylesheet", () => {
     expect(canvas).toMatch(/\.fl-wire-loop\.fl-loop-pending \{[^}]*stroke-dasharray/);
     expect(canvas).toMatch(/\.fl-wire-loop\.fl-loop-running \{[^}]*stroke: var\(--tone-working\)/);
     expect(canvas).not.toMatch(/\.fl-wire-loop\.fl-loop-running \{[^}]*dasharray/);
-    expect(canvas).toMatch(/\.fl-loop-pill \{[^}]*position: absolute;[^}]*border-radius: 999px/);
+    expect(canvas).toMatch(/\.fl-loop-pill \{[^}]*position: absolute;[^}]*border-radius: var\(--radius-pill\)/);
   });
   it("the canvas keeps headroom for the arc's rise", () => {
     expect(code("components/flights/FlywayCanvas.tsx")).toContain("shown.rise ? Math.ceil(shown.rise) + pad : 0");

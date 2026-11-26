@@ -293,7 +293,7 @@ describe("the Flight tab draws the same", () => {
     expect(src).toContain("subFrames={subFrames}");
     // Its agent's terminal is the pane's Agent tab.
     expect(src).toContain('useUi.getState().setLastTab(title, "agent");');
-    expect(css("components/flights/Flights.css")).toMatch(/\.fl-chain-frame \{[^}]*border-radius: 14px;/);
+    expect(css("components/flights/Flights.css")).toMatch(/\.fl-chain-frame \{[^}]*border-radius: var\(--radius-lg\);/);
   });
 });
 

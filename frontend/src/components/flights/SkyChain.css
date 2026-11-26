@@ -147,7 +147,7 @@
   box-sizing: border-box;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--sky-tile-bg);
   border: 1.5px solid var(--sky-tile-line);
   box-shadow: var(--sky-shadow-rest, 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14));
@@ -300,7 +300,8 @@
 .sky-node .fl-you-tile .fl-btn {
   font-size: 12px;
   line-height: 18px;
-  padding: 2px 10px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
 }
 
 /* A tile with an ask (a Review out of rounds, the checks owed at the end):
@@ -444,7 +445,7 @@
   height: 18px;
   padding: 0 3px;
   box-sizing: border-box;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 10.5px;
   font-weight: 700;
   line-height: 1;
@@ -493,7 +494,7 @@
   display: flex;
   gap: 3px;
   padding: 1px 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--sky-bg, var(--bg));
 }
 
@@ -535,7 +536,7 @@
   width: 11px;
   height: 14px;
   margin-top: -7px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .sky-port-out {
@@ -568,7 +569,7 @@
 /* --- The head: the session tile, or a trigger ----------------------------- */
 
 .sky-head .sky-tile {
-  border-radius: 32px 12px 12px 32px;
+  border-radius: 32px var(--radius-lg) var(--radius-lg) 32px;
 }
 
 .sky-head .sky-tile-icon {
@@ -594,7 +595,7 @@
 .sky-head-chip {
   display: inline-block;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 10.5px;
   line-height: 15px;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
@@ -638,7 +639,7 @@
   display: grid;
   place-items: center;
   transform: translate(-50%, -50%);
-  border-radius: 7px;
+  border-radius: var(--radius);
   border: 1.5px solid var(--sky-tile-line-hi);
   background: var(--sky-tile-bg);
   color: var(--muted);
@@ -691,7 +692,7 @@
   font-size: 11px;
   line-height: 1;
   padding: 4px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   color: var(--fl-ink-accent, var(--accent));
   background: var(--panel);
@@ -747,7 +748,7 @@
 .sky-node-left {
   margin-top: 3px;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid color-mix(in srgb, var(--tone-working) 55%, transparent);
   color: var(--fl-ink-working, var(--tone-working));
   background: var(--panel);
@@ -793,7 +794,7 @@
   box-sizing: border-box;
   height: 18px;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--tone-working);
   color: var(--fl-ink-working, var(--tone-working));
   background: var(--panel);
@@ -820,7 +821,7 @@
 .sky-start-on {
   max-width: 100%;
   margin: 0;
-  padding: 0 2px;
+  padding: 0 4px;
   border: 0;
   background: none;
   font-family: inherit;
@@ -840,7 +841,7 @@
 .sky-start-on:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 /* A ready head's name stays one line, so the head fits its box. */
 .sky-head:has(.sky-ready) > .sky-node-title {
@@ -876,7 +877,7 @@
    session "pill" shape — the frame round the chain is the session). */
 
 .sky-head.sky-agent .sky-tile {
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
 }
 
 .sky-head.sky-agent .sky-node-sub {
@@ -894,7 +895,7 @@
   text-align: left;
   padding: 0 8px 8px;
   border: 1px solid var(--sky-tile-line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 70%, var(--bg, transparent));
 }
 
@@ -915,7 +916,7 @@
   margin: 0 -8px 8px;
   padding: 0 10px;
   border-bottom: 1px solid var(--sky-tile-line);
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: color-mix(in srgb, var(--panel-2, var(--panel)) 72%, transparent);
   font-size: 11.5px;
   font-weight: 600;
@@ -927,7 +928,7 @@
 }
 
 .sky-subframe .sky-tile {
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
 }
 
 .sky-subframe .sky-tile-icon {
@@ -973,7 +974,7 @@
   place-items: center;
   width: 18px;
   height: 18px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--sky-tile-line);
   background: var(--sky-tile-bg);
   color: var(--muted);
@@ -1013,7 +1014,7 @@
   width: 320px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--sky-shadow-raised, 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34));
@@ -1115,7 +1116,7 @@
   content: "";
   position: absolute;
   inset: -18px;
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   pointer-events: auto;
 }
 
@@ -1210,7 +1211,7 @@
   height: 100%;
   overflow: auto;
   border: 1.5px solid var(--sky-tile-line-hi, var(--border));
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--sky-shadow-rest, 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14));
   color: var(--text);
@@ -1300,7 +1301,7 @@
   font-size: 10px;
   line-height: 1;
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel);
   color: var(--muted);
   white-space: nowrap;

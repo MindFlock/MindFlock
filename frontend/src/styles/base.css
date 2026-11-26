@@ -24,6 +24,16 @@ textarea {
   font-family: inherit;
 }
 
+/* And a button that names no size gets the app's control size rather than
+   the browser's 13.333px, and one line height everywhere: "normal" is 1.2 of
+   the font on a Mac but 1.4 on Linux and Windows fonts, so the same button
+   came out 4px taller there and the control heights (--ctl-h-*) could not
+   hold. Any class that sets either still wins. */
+button {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
 body {
   display: grid;
   /* --sidebar-w is written by App.tsx from the UI store (the sidebar's right

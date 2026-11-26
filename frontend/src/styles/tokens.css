@@ -109,6 +109,39 @@
   --app-border: var(--border);
   --app-text: var(--text);
   --app-muted: var(--muted);
+
+  /* --- Shape and control scale --------------------------------------------
+     One small set of corner radii and control sizes, so a button looks the
+     same wherever it sits (a ux-sweep counted 9 radii, 29 paddings and 20
+     heights across the app's buttons). Not themed: light mode and every
+     surface set share them. mobile.css copies them by value.
+
+     Radii: --radius-sm for chips, tags and small icon buttons; --radius for
+     buttons, fields and menus; --radius-md for cards and popovers;
+     --radius-lg for dialogs and panels; --radius-xl for sheets; --radius-pill
+     for pills and toggles. A circle stays 50%.
+
+     Control sizes: xs (inline chips, a row's quiet action), sm (the default
+     compact button), md (a dialog's buttons), lg (a primary call to action).
+     The HEIGHT is the contract: a button takes --ctl-pad-X with min-height
+     --ctl-h-X, and the padding's top and bottom sit just under what the
+     height needs, so an 11px and a 14px label come out the same height (a
+     button centres its label). A button that sets its own height pads only
+     its sides (0 Npx). */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --ctl-pad-xs: 1px 6px;
+  --ctl-pad-sm: 3px 10px;
+  --ctl-pad: 5px 12px;
+  --ctl-pad-lg: 7px 16px;
+  --ctl-h-xs: 20px;
+  --ctl-h-sm: 24px;
+  --ctl-h: 28px;
+  --ctl-h-lg: 32px;
 }
 
 /* Light mode. `.light` is set on <html> early (in index.html) and toggled by

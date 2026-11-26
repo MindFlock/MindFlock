@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One set of shapes and button sizes.** A ux-sweep of the app counted 11
+  corner radii, 44 paddings and 29 heights across its buttons. Corners now
+  come from six radius tokens and buttons from four sizes (20, 24, 28 and
+  32px tall), each a padding with a height, in `styles/tokens.css` (and
+  copied into the phone page's `mobile.css`). Buttons share one line height,
+  so the same button is the same height on Mac, Windows and Linux; a button
+  with no size of its own takes 13px rather than the browser's 13.33px; and
+  rows that sat side by side at two heights (the sidebar's View row, a pane
+  header's tabs and actions) now match. Most buttons now sit on one of the
+  four heights (673 of 895 measured, up from 346); the rest are other kinds
+  of control: menu rows, chips, links and the phone keys.
+
 ## [0.14.35] - 2026-11-25
 
 ### Fixed

@@ -91,7 +91,7 @@
 
 .preset-row button {
   flex: none;
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 0 10px;
   font-size: 12px;
   cursor: pointer;

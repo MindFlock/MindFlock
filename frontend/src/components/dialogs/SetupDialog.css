@@ -12,7 +12,7 @@
   text-align: left;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 #empty .setup-card h2 {
@@ -56,8 +56,9 @@
 .test-btn {
   cursor: pointer;
   font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 6px;
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -154,7 +155,7 @@ button.linklike {
 #setup-panel-dlg {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 18px 22px;
   width: 560px;
   max-width: 92vw;
@@ -183,7 +184,7 @@ button.linklike {
   align-items: baseline;
   gap: 8px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg);
   border: 1px solid var(--border);
   font-size: 12px;
@@ -326,7 +327,7 @@ button.linklike {
   letter-spacing: 2px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--panel-2);
 }
 
@@ -360,7 +361,7 @@ button.linklike {
   background: var(--bg, #1e1e1e);
   color: inherit;
   border: 1px solid var(--border, #333);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 14px 16px;
   width: min(640px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);

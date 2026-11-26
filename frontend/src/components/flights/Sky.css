@@ -40,7 +40,7 @@ body.view-switch #sky-view {
   z-index: 40;
   pointer-events: none;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 85%, transparent);
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22);
 }
@@ -126,7 +126,7 @@ body.view-switch #sky-view {
   box-sizing: border-box;
   padding: 0 10px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fl-ink-muted);
   font-size: 13px;
@@ -208,7 +208,7 @@ body.view-switch #sky-view {
   align-items: center;
   justify-content: center;
   min-width: 28px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -283,7 +283,7 @@ body.view-switch #sky-view {
   box-sizing: border-box;
   padding: 2px 11px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -370,7 +370,7 @@ body.view-switch #sky-view {
   box-sizing: border-box;
   padding: 0 10px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
@@ -560,7 +560,7 @@ body.view-switch #sky-view {
   box-sizing: border-box;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   display: flex;
@@ -751,7 +751,7 @@ details.fl-group-waiting > summary {
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--tone-attention);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel-2);
 }
 
@@ -789,7 +789,7 @@ details.fl-group-waiting > summary {
 .sky-narrow .sky-drawer {
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .sky-narrow .sky-drawer.open {
@@ -863,10 +863,12 @@ details.fl-group-waiting > summary {
     display: none;
   }
   .sky-modes .fl-pick {
-    padding: 3px 7px;
+    padding: var(--ctl-pad-sm);
+    min-height: var(--ctl-h-sm);
   }
   .sky-tidy {
-    padding: 3px 8px;
+    padding: var(--ctl-pad-sm);
+    min-height: var(--ctl-h-sm);
   }
   .sky-toolbar {
     gap: 5px;
@@ -1042,7 +1044,7 @@ details.fl-group-waiting > summary {
   font: inherit;
   font-size: 13px;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -1064,7 +1066,7 @@ details.fl-group-waiting > summary {
   gap: 8px;
   padding: 5px 7px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1079,7 +1081,7 @@ details.fl-group-waiting > summary {
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   flex: none;
 }
@@ -1132,7 +1134,7 @@ details.fl-group-waiting > summary {
   flex-direction: column;
   gap: 6px;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);

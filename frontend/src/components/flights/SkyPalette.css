@@ -11,7 +11,7 @@
   min-width: 240px;
   min-height: 200px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--sky-shadow-rest);
   overflow: hidden;
@@ -57,7 +57,7 @@
   min-width: 18px;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--fl-ink-muted, var(--muted));
   font-size: 10.5px;
   line-height: 16px;

@@ -52,7 +52,7 @@ describe("a ready flight", () => {
     expect(html).toMatch(/<button type="button" class="sky-start-on" title="Starts only when you press ▶ Run\.[^"]*">runs when you press Run<\/button>/);
     expect(html).not.toContain("linklike");
     const sheet = css("components/flights/SkyChain.css");
-    expect(sheet).toMatch(/\.sky-ready-run \{[^}]*border-radius: 999px;[^}]*\}/);
+    expect(sheet).toMatch(/\.sky-ready-run \{[^}]*border-radius: var\(--radius-pill\);[^}]*\}/);
     expect(sheet).toMatch(/\.sky-start-on \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;[^}]*\}/);
     expect(sheet).not.toMatch(/\.sky-start-on \{[^}]*text-decoration: underline/);
     // The session tile's sub: one line, and nothing under the tile shrinks under the next.

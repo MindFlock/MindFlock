@@ -65,7 +65,7 @@
   left: 6px;
   right: 6px;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
   pointer-events: none;
@@ -195,7 +195,7 @@
 #verify-bar .dc-open:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 #mindflock-bar .dc-actions,
@@ -214,7 +214,7 @@
   cursor: pointer;
   font-size: 11px;
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -270,7 +270,7 @@
   min-width: 14px;
   height: 14px;
   padding: 0 4px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--red);
   color: var(--red-ink);
   font-size: 9px;
@@ -311,7 +311,7 @@
   cursor: pointer;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   transition: background 0.15s, border-color 0.15s;
 }
 
@@ -378,8 +378,9 @@
 #prompts-bar .as-toggle {
   cursor: pointer;
   font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -428,7 +429,7 @@
   flex: none;
   min-width: 18px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid rgba(var(--accent-rgb), 0.45);
   background: rgba(var(--accent-rgb), 0.16);
   color: var(--text);
@@ -450,8 +451,9 @@
 #hub-bar .as-toggle {
   cursor: pointer;
   font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -534,7 +536,7 @@
   cursor: pointer;
   font-size: 11px;
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);

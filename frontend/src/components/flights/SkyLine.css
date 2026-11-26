@@ -9,7 +9,7 @@
   min-width: 320px;
   padding: 0 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--sky-shadow-rest);
@@ -100,7 +100,7 @@
   height: 30px;
   padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: var(--fl-btn-radius, 6px);
+  border-radius: var(--fl-btn-radius, var(--radius));
   background: none;
   color: var(--fl-ink-muted);
   font: inherit;
@@ -173,7 +173,7 @@
 
 .skl-menu .vf-menu > summary {
   padding: 3px 9px 7px;
-  border-radius: var(--fl-btn-radius, 6px);
+  border-radius: var(--fl-btn-radius, var(--radius));
   color: var(--fl-ink-muted);
   font-size: 18px;
 }
@@ -201,7 +201,7 @@
   align-items: center;
   min-height: 32px;
   padding: 0 12px;
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.2;
 }
 
@@ -252,7 +252,7 @@
   align-items: center;
   min-height: 32px;
   padding: 0 12px;
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.2;
 }
 
@@ -360,7 +360,7 @@
   box-sizing: border-box;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   display: flex;
@@ -379,7 +379,7 @@
   text-align: left;
   align-items: stretch;
   box-sizing: content-box;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
@@ -409,7 +409,7 @@
   height: 22px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--fl-btn-radius, 6px);
+  border-radius: var(--fl-btn-radius, var(--radius));
   background: none;
   color: var(--fl-ink-muted);
   font: inherit;
@@ -464,7 +464,7 @@
 .skl .fl-box:not(.fl-box-open) {
   gap: 5px;
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 15px;
 }
 
@@ -502,7 +502,7 @@
 .skl .fl-box:not(.fl-box-open) .fl-box-icon {
   width: 26px;
   height: 26px;
-  border-radius: 7px;
+  border-radius: var(--radius);
 }
 
 .skl .fl-box:not(.fl-box-open) .fl-box-icon .fl-stop-icon {
@@ -527,7 +527,7 @@
 .skl .fl-box.fl-box-branch:not(.fl-box-open) {
   gap: 4px;
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
 }
 
@@ -878,7 +878,7 @@
   flex: 1 1 0;
   min-width: 3px;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--tone-working) 70%, transparent);
 }
 
@@ -1001,7 +1001,7 @@
   margin: 0 0 8px;
   padding: 0 4px 0 8px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--panel) 86%, transparent);
   font-size: 12.5px;
   outline: calc(1px / var(--sky-z, 1)) solid transparent;
@@ -1054,7 +1054,7 @@
 .skl-chainline.is-session-over .sky-socket {
   outline: calc(2px / var(--sky-z, 1)) solid var(--accent);
   outline-offset: calc(3px / var(--sky-z, 1));
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .skl-chain-wrap {
@@ -1098,7 +1098,7 @@
 }
 
 .skl.skl-chainline.is-selected {
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
 }
 
 /* The session's card, open in its tile's place (SkyLine): the card at the
@@ -1170,7 +1170,7 @@
   bottom: 0;
   z-index: 0;
   border: calc(1px / var(--sky-z, 1)) solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 78%, transparent);
   pointer-events: none;
   transition: border-color 0.12s, box-shadow 0.12s, opacity 0.15s;
@@ -1196,7 +1196,7 @@
   padding: 0 6px 0 12px;
   border: none;
   border-bottom: calc(1px / var(--sky-z, 1)) solid var(--border);
-  border-radius: 14px 14px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: color-mix(in srgb, var(--panel-2) 72%, transparent);
   outline: none;
 }
@@ -1388,7 +1388,7 @@
    an underline on hover say it acts. */
 button.sky-held-start {
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -1419,7 +1419,7 @@ button.sky-held-start:disabled {
   min-width: 0;
   padding: 1px 4px 1px 8px;
   border: calc(1px / var(--sky-z, 1)) solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--panel-2) 85%, transparent);
   color: var(--muted);
   font-size: 10.5px;
@@ -1438,7 +1438,7 @@ button.sky-held-start:disabled {
   flex: none;
   padding: 0 4px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: none;
   color: var(--text);
   font: inherit;

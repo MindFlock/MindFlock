@@ -22,7 +22,7 @@
 .cleanup-group {
   margin: 8px 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 6px 10px;
 }
 
@@ -77,7 +77,7 @@
 .cleanup-badge {
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   color: var(--muted);
   white-space: nowrap;

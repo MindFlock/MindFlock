@@ -117,9 +117,9 @@ describe("the toolbar is the secondary tier", () => {
   const primary = cssRule(css("components/settings/screens/screens.css"), ".btn-primary");
 
   it("the tiers' radius and the toolbar's height are one token each", () => {
-    expect(testBtn).toContain("border-radius: 6px");
-    expect(primary).toContain("border-radius: 6px");
-    expect(canvas).toMatch(/--fl-btn-radius: 6px;/);
+    expect(testBtn).toContain("border-radius: var(--radius)");
+    expect(primary).toContain("border-radius: var(--radius)");
+    expect(canvas).toMatch(/--fl-btn-radius: var\(--radius\);/);
     expect(canvas).toMatch(/--fl-ctl-h: 28px;/);
   });
 
@@ -150,7 +150,7 @@ describe("the toolbar is the secondary tier", () => {
   });
 
   it("the line picker's chips have a rule (they had none)", () => {
-    expect(cssRule(sky, ".sky-flypick .fl-chip")).toContain("border-radius: 999px");
+    expect(cssRule(sky, ".sky-flypick .fl-chip")).toContain("border-radius: var(--radius-pill)");
   });
 });
 
@@ -177,15 +177,15 @@ describe("quiet-icon: the house hover and the accent ring", () => {
   }
 
   it("the glyph buttons share the tiers' radius", () => {
-    expect(cssRule(css("components/flights/StopParts.css"), ".fl-icon-btn")).toContain("border-radius: var(--fl-btn-radius, 6px)");
-    expect(cssRule(css("components/flights/FlywayCanvas.css"), ".fl-tool")).toContain("border-radius: var(--fl-btn-radius, 6px)");
-    expect(cssRule(css("components/flights/SkyLine.css"), ".skl-size")).toContain("border-radius: var(--fl-btn-radius, 6px)");
+    expect(cssRule(css("components/flights/StopParts.css"), ".fl-icon-btn")).toContain("border-radius: var(--fl-btn-radius, var(--radius))");
+    expect(cssRule(css("components/flights/FlywayCanvas.css"), ".fl-tool")).toContain("border-radius: var(--fl-btn-radius, var(--radius))");
+    expect(cssRule(css("components/flights/SkyLine.css"), ".skl-size")).toContain("border-radius: var(--fl-btn-radius, var(--radius))");
   });
 
   it("the stop menu's rows are .vf-menu-item's", () => {
     const row = cssRule(css("components/flights/StopMenu.css"), ".fl-stopmenu-item");
     const vf = cssRule(css("components/dialogs/VerifyDialog.css"), ".vf-menu-list .vf-menu-item");
-    for (const d of ["padding: 5px 9px", "border-radius: 5px", "font-size: 12px", "line-height: 1.5"]) {
+    for (const d of ["padding: 5px 9px", "border-radius: var(--radius-sm)", "font-size: 12px", "line-height: 1.5"]) {
       expect(vf).toContain(d);
       expect(row).toContain(d);
     }

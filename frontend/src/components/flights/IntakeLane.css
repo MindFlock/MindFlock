@@ -24,7 +24,7 @@
   max-height: 100%;
   overflow-y: auto;
   border: 1px solid var(--lane-line);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--muted) 4%, var(--panel));
   color: var(--text);
 }
@@ -44,7 +44,7 @@
   margin: 0 -8px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--lane-hair);
-  border-radius: 13px 13px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: color-mix(in srgb, var(--muted) 10%, var(--panel));
   font-size: 13px;
   font-weight: 600;
@@ -88,8 +88,8 @@
   border: 1px solid transparent;
   background: transparent;
   color: var(--fl-ink-muted, var(--muted));
-  border-radius: var(--fl-btn-radius, 6px);
-  padding: 0 5px;
+  border-radius: var(--fl-btn-radius, var(--radius));
+  padding: 0 6px;
   font-family: inherit;
   font-size: 12px;
   font-weight: 400;
@@ -121,7 +121,7 @@
   padding: 4px 4px 2px;
   background: transparent;
   border: 0 solid var(--lane-hair);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sky-lane-block + .sky-lane-block {
@@ -149,7 +149,7 @@
   margin: 1px 0 0;
   padding: 2px 5px;
   border: 1px solid color-mix(in srgb, var(--lane-kind) 45%, transparent);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font-size: 11px;
@@ -195,11 +195,11 @@
   padding: 8px;
   border-width: 1px;
   border-style: dashed;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sky-lane-block + .sky-lane-block-stray {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sky-lane-chips {
@@ -214,7 +214,7 @@
   font-size: 11.5px;
   line-height: 1.25;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--lane-hair, var(--border));
   color: var(--muted);
   background: transparent;
@@ -248,7 +248,7 @@
   height: auto;
   padding: 0;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   cursor: pointer;
 }
@@ -341,7 +341,7 @@
 
 .sky-lane-items {
   border: 1px solid var(--lane-hair, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   overflow: hidden;
 }
@@ -477,7 +477,7 @@
   align-items: center;
   padding: 6px 4px 8px;
   gap: 8px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .sky-lane-rail > .sky-lane-toggle {
@@ -506,7 +506,7 @@
   right: -7px;
   min-width: 15px;
   padding: 2px 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   font-size: 9.5px;
   font-weight: 600;

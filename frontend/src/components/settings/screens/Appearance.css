@@ -23,10 +23,11 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   cursor: pointer;
   font-size: 13px;
@@ -73,7 +74,7 @@
   grid-template-columns: 26% 1fr;
   grid-template-rows: 9px 1fr;
   height: 54px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -137,14 +138,14 @@
 .theme-preview .tp-muted {
   width: 70%;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--muted);
 }
 
 .theme-preview .tp-btn {
   width: 34px;
   height: 9px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   position: relative;
 }

@@ -7,7 +7,7 @@
   color: var(--text);
   border: 1px solid var(--border);
   border-left: 3px solid var(--yellow, #d6a53c);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 #memory-confirm .mc-card.critical {

@@ -14,7 +14,7 @@
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   overflow: hidden;
   resize: both;
@@ -58,7 +58,7 @@
   flex: none;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -126,8 +126,9 @@
 
 .fpw-use {
   flex: none;
-  border-radius: 6px;
-  padding: 6px 14px;
+  border-radius: var(--radius);
+  padding: var(--ctl-pad);
+  min-height: var(--ctl-h);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;

@@ -1368,6 +1368,20 @@ the CLI's own hooks where available, with CPU/pane-hash fallback (see
 [providers.md](providers.md)), and debounced across two polls (events push
 instantly).
 
+**Shapes and control sizes are tokens too.** Corner radii come from six
+(`--radius-sm` 4px for chips and small icon buttons, `--radius` 6px for
+buttons, fields and menus, `--radius-md` 8px for cards and popovers,
+`--radius-lg` 12px for dialogs, panels and the Sky's frames, `--radius-xl`
+16px for sheets, `--radius-pill`; a circle stays 50%), and a button comes in
+four sizes, each a padding with a height: `--ctl-pad-xs` / `--ctl-h-xs` (20px,
+an inline chip or a row's quiet action), `-sm` (24px, the default compact
+button), plain `--ctl-pad` / `--ctl-h` (28px, a dialog's buttons) and `-lg`
+(32px, a primary call to action). The height is the contract: the padding sits
+just under it and `min-height` sets it, and buttons share one line height
+(1.2, set in `styles/base.css`), so an 11px and a 14px label come out the same
+height on every OS. `mobile.css` copies the scale by value.
+`__tests__/designScale.test.ts` keeps literal radii out of the stylesheets.
+
 A push whose checks have not passed for this commit stops with a bottom-right
 card — *Checks haven't passed for this commit* — and a **Push anyway** button,
 and **Delete** on a session whose folder is gone asks the same way. These used

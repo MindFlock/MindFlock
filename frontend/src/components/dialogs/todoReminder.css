@@ -4,7 +4,7 @@
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 16px 18px 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
@@ -44,7 +44,8 @@
 }
 #todo-reminder .tr-acts button {
   font-size: 12px;
-  padding: 3px 9px;
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
 }
 #todo-reminder .tr-dismiss {
   margin-left: auto;

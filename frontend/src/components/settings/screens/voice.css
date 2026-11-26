@@ -65,7 +65,7 @@
   gap: 4px;
   padding: 2px 4px 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel-2);
   font-size: 12px;
   color: var(--text);
@@ -83,7 +83,7 @@
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0 4px;
   border-radius: 50%;
 }
 .voice-chip-x:hover {
@@ -115,7 +115,7 @@
 .voice-pronounce-as {
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel-2);
   font-size: 12px;
 }

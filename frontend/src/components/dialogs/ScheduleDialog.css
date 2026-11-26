@@ -44,7 +44,7 @@
   align-items: baseline;
   gap: 4px 8px;
   padding: 9px 12px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   background: color-mix(in srgb, var(--accent) 9%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
@@ -82,7 +82,7 @@
   letter-spacing: 0;
   padding: 0 6px;
   line-height: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -101,7 +101,7 @@
   font-size: 12px;
   padding: 10px 12px;
   border: 1px dashed var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
 }
 
 /* A scheduled card: its schedule as a strip inside it — the cadence, when it
@@ -113,7 +113,7 @@
   justify-content: space-between;
   gap: 6px 14px;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   border: 1px solid var(--border);
   font-size: 12px;
@@ -147,8 +147,9 @@
 .sch-sw {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 3px 8px;
+  border-radius: var(--radius);
+  padding: var(--ctl-pad-sm);
+  min-height: var(--ctl-h-sm);
   font-size: 12px;
   color: var(--accent);
   cursor: pointer;
@@ -210,7 +211,7 @@
   gap: 12px;
   padding: 30px 16px 26px;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .sch-empty p {
@@ -232,8 +233,9 @@
 }
 
 .sch-empty .tpl-run {
-  font-size: 12.5px;
-  padding: 7px 16px;
+  font-size: 13px;
+  padding: var(--ctl-pad-lg);
+  min-height: var(--ctl-h-lg);
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
@@ -255,7 +257,7 @@
   margin: 0 -18px -14px;
   padding: 12px 18px 14px;
   background: var(--panel-2);
-  border-radius: 0 0 10px 10px;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 /* Folder wraps FolderField so "Add one" can ring it (and the tour can find
@@ -272,7 +274,7 @@
 }
 
 .tpl-folder-wrap.tpl-flash {
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   animation: tpl-flash 1.6s ease-out 1;
@@ -325,7 +327,7 @@
 /* Schedule… / Change schedule: the compact row inside the card. */
 .tpl-sched-row {
   padding: 10px 12px 8px;
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--accent);
   background: var(--panel);
 }
