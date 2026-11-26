@@ -107,11 +107,19 @@ body #mf-winctl {
    it takes the region's muted token (which regions.css maps to the TOPBAR's
    muted, not the app's) and drops the wordmark's bold + letter-spacing. */
 #topbar .tb-version {
+  position: relative;
   margin-left: 6px;
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0;
   color: var(--muted);
+}
+
+/* The version link is 15px tall: a 24px hit area, layout unchanged. */
+#topbar .tb-version::after {
+  content: "";
+  position: absolute;
+  inset: -5px -2px;
 }
 
 /* Left zone holds the sidebar/theme cluster + the menu; flex:1 balances the

@@ -167,11 +167,11 @@
       <button type="button" class="key" data-key="esc">esc</button>
       <button type="button" class="key sticky" id="ctrl">ctrl</button>
       <button type="button" class="key" data-key="tab">tab</button>
-      <button type="button" class="key" data-key="up">↑</button>
-      <button type="button" class="key" data-key="down">↓</button>
-      <button type="button" class="key" data-key="left">←</button>
-      <button type="button" class="key" data-key="right">→</button>
-      <button type="button" class="key" data-key="enter">⏎</button>
+      <button type="button" class="key" data-key="up" aria-label="Arrow up">↑</button>
+      <button type="button" class="key" data-key="down" aria-label="Arrow down">↓</button>
+      <button type="button" class="key" data-key="left" aria-label="Arrow left">←</button>
+      <button type="button" class="key" data-key="right" aria-label="Arrow right">→</button>
+      <button type="button" class="key" data-key="enter" aria-label="Enter">⏎</button>
     </div>
 
     <!-- Commit-message sheet: commit needs a message, so tapping Commit slides
@@ -194,7 +194,7 @@
     <!-- Sessions: the picker. Attention first, each row numbered and painted
          with the rail's state (tone dot + word). Tap a row to open it; its ⋯
          — or a long press on the row — opens that session's actions. -->
-    <div id="sessions-sheet" class="sheet hidden" role="dialog" aria-label="Sessions">
+    <div id="sessions-sheet" class="sheet hidden" role="dialog" aria-label="Sessions" aria-modal="true">
       <div class="sheet-box">
         <div class="sheet-title">Sessions</div>
         <div id="session-list" class="sheet-list"></div>
@@ -211,6 +211,7 @@
           <button type="button" id="sessions-hub">Shared files</button>
           <button type="button" id="sessions-recent">Recently closed</button>
           <button type="button" id="sessions-new">New session</button>
+          <button type="button" id="sessions-done">Done</button>
         </div>
       </div>
     </div>
@@ -218,7 +219,7 @@
     <!-- One session's actions, with the rail row menu's words: Restart (only
          when offline), Pause / Resume session, Close, Delete…. Delete asks on
          an inline strip, never a native dialog. -->
-    <div id="act-sheet" class="sheet hidden" role="dialog" aria-labelledby="act-title">
+    <div id="act-sheet" class="sheet hidden" role="dialog" aria-labelledby="act-title" aria-modal="true">
       <div class="sheet-box">
         <div class="sheet-title" id="act-title"></div>
         <div id="act-state" class="act-state"></div>
@@ -234,7 +235,7 @@
          (GET /api/hub). "Add to message" puts an item's code in the message
          box; the agent gets its path when it is sent. A tick per row selects
          several; the bar under the list adds them all at once. -->
-    <div id="hub-sheet" class="sheet hidden" role="dialog" aria-labelledby="hub-title">
+    <div id="hub-sheet" class="sheet hidden" role="dialog" aria-labelledby="hub-title" aria-modal="true">
       <div class="sheet-box">
         <div class="sheet-title" id="hub-title">Shared files</div>
         <div class="new-muted">Files and text every session can use. Put an item's code (like file:k7m2) in a message and the agent gets the file. Tick several to add them at once.</div>
@@ -256,7 +257,7 @@
     <!-- Recently closed: GET /api/recently-closed here and on every connected
          device (via /api/devices/<device>/fwd), newest first, each with
          Reopen (POST /api/recently-closed/<id>/reopen) on its own device. -->
-    <div id="recent-sheet" class="sheet hidden" role="dialog" aria-label="Recently closed">
+    <div id="recent-sheet" class="sheet hidden" role="dialog" aria-label="Recently closed" aria-modal="true">
       <div class="sheet-box">
         <div class="sheet-title">Recently closed</div>
         <div id="recent-list" class="sheet-list"></div>
@@ -271,7 +272,7 @@
          PR?", "Push blocked — red zone changed" with Push anyway. confirm() is
          a silent "no" in the desktop app and in some phone shells, so every
          question on this page is this sheet. -->
-    <div id="ask-sheet" class="sheet hidden" role="dialog" aria-labelledby="ask-title">
+    <div id="ask-sheet" class="sheet hidden" role="dialog" aria-labelledby="ask-title" aria-modal="true">
       <div class="sheet-box">
         <div class="sheet-title" id="ask-title"></div>
         <div id="ask-detail" class="ask-detail"></div>

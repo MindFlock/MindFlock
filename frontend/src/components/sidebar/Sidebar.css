@@ -155,6 +155,7 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
 }
 
 #sidebar-footer .foot-link {
+  position: relative;
   background: none;
   border: 0;
   padding: 0;
@@ -162,6 +163,14 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   color: var(--muted);
   font-size: 11px;
   line-height: 1;
+}
+
+/* An 11px-tall link is hard to hit: grow the hit area to 24px without moving
+   anything (WCAG 2.5.8 target size). */
+#sidebar-footer .foot-link::after {
+  content: "";
+  position: absolute;
+  inset: -7px -4px;
 }
 
 #sidebar-footer .foot-link:hover {

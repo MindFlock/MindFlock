@@ -13,6 +13,17 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Controls take the app's font. Browsers give buttons, fields and selects
+   their own (Arial) unless told otherwise, so most buttons rendered in Arial
+   beside text in the app font. Only the family: every control sets its own
+   size, and a class that names a font (a monospace field) still wins. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
 body {
   display: grid;
   /* --sidebar-w is written by App.tsx from the UI store (the sidebar's right

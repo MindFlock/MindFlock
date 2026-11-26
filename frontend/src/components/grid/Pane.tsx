@@ -1511,6 +1511,9 @@ function PaneImpl({
                 type="button"
                 className="prompt-pin-mark"
                 aria-expanded={pinOpen}
+                // The ❯ is the visible mark; without a label it is also the
+                // name a screen reader reads.
+                aria-label={pinOpen ? "Collapse the prompt to one line" : "Show the whole prompt"}
                 title={pinOpen ? "Collapse to one line" : "Show the whole prompt"}
                 onClick={(e) => {
                   e.stopPropagation();
