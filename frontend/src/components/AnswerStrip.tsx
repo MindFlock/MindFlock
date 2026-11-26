@@ -280,6 +280,7 @@ export function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen,
               type="button"
               className="fa-open ghost"
               title="Open its pane"
+              aria-label="Open its pane"
               onClick={() => onOpen()}
             >
               {variant === "thread" ? "Open ↗" : "↗"}
@@ -328,7 +329,7 @@ export function AskedInWordsView({
           </button>
           {variant === "thread" && <span className="fa-sp" />}
           {onOpen && (
-            <button type="button" className="fa-open ghost" title="Open its pane" onClick={() => onOpen()}>
+            <button type="button" className="fa-open ghost" title="Open its pane" aria-label="Open its pane" onClick={() => onOpen()}>
               {variant === "thread" ? "Open ↗" : "↗"}
             </button>
           )}

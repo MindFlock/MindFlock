@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Buttons use the app's font.** Browsers give buttons and fields their own
+  font (Arial) unless told otherwise, so most of the app's buttons (126 of
+  168 on the main screen) rendered in Arial beside text in the app font.
+  They now all take the app font.
+- **Icon buttons say what they do.** The ❯ that expands a pane's pinned
+  prompt, the bell's ⚙ and the ↗ that opens a session's pane were read by
+  screen readers (and agents) as "❯", "⚙" and "↗"; they now carry their names.
+  On the phone page, the arrow and Enter keys above the keyboard are named
+  too.
+- **Phone page sheets close with Escape.** The Sessions, session actions,
+  Recently closed and question sheets ignored Escape (an iPad keyboard, a
+  screen reader's dismiss gesture) and did not say they were modal; Escape
+  now closes the topmost one like tapping its backdrop, and the Sessions
+  sheet has a Done button like Recently closed.
+- **Tiny controls are easier to hit.** Customize and Help in the sidebar
+  footer (11px tall), the version link in the top bar, the fold-workers
+  toggle and the prompt ❯ get a 24px hit area; nothing moves.
+- **One spelling for Settings:** the top bar's button is "Open Settings",
+  like the palette and the help.
+
 ## [0.14.34] - 2026-11-25
 
 ### Added

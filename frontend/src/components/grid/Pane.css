@@ -397,6 +397,7 @@
 }
 
 .prompt-pin .prompt-pin-mark {
+  position: relative;
   flex: none;
   background: none;
   border: none;
@@ -411,6 +412,13 @@
 
 .prompt-pin.pin-open .prompt-pin-mark {
   transform: rotate(90deg);
+}
+
+/* The ❯ is 13px square: a 24px hit area around it, layout unchanged. */
+.prompt-pin .prompt-pin-mark::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 /* "Task:" — what the pinned line is. */

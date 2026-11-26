@@ -660,6 +660,7 @@ export function NotificationsBell() {
               <button
                 className="notif-settings"
                 type="button"
+                aria-label="Notification settings"
                 title="Notification settings — desktop notifications and which events notify"
                 onClick={() => {
                   setOpen(false);

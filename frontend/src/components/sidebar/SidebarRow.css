@@ -848,6 +848,7 @@
 }
 
 .inst .fold-kids {
+  position: relative;
   flex: none;
   padding: 0 4px;
   border: 0;
@@ -859,6 +860,13 @@
   color: var(--muted);
   cursor: pointer;
   opacity: 0.75;
+}
+
+/* A 12px-tall toggle: a 24px hit area around it, layout unchanged. */
+.inst .fold-kids::after {
+  content: "";
+  position: absolute;
+  inset: -6px -2px;
 }
 
 .inst .fold-kids:hover,
