@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.35] - 2026-11-25
+
 ### Fixed
 
 - **Buttons use the app's font.** Browsers give buttons and fields their own
@@ -7757,7 +7759,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.34...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.35...HEAD
+[0.14.35]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.35
 [0.14.34]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.34
 [0.14.33]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.33
 [0.14.32]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.32
