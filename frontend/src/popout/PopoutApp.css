@@ -1,0 +1,179 @@
+/* A pop-out window (popout/PopoutApp.tsx): a window bar over one pane.
+
+   The page skeleton (styles/base.css) is the main window's — a 260px/1fr
+   grid under a fixed 40px top bar. A pop-out has neither: one column, the
+   bar in normal flow, the pane taking the rest. */
+body.popout-window {
+  display: flex;
+  flex-direction: column;
+  padding-top: 0;
+}
+
+#popout-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100vh;
+}
+
+/* The bar: the same height and colours as the main window's top bar, and the
+   window's native drag region (Electron; a browser ignores it). Controls opt
+   out with no-drag. 40px is also the height of the desktop shell's own
+   – □ ✕ (#mf-winctl, injected top-right on Windows/Linux). */
+#popout-bar {
+  flex: none;
+  height: var(--topbar-h, 40px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+/* macOS: the native traffic lights sit top-left (TopBar.css explains the
+   78px). Hidden in fullscreen, and so is the gap. */
+#popout-bar[data-mac-lights] {
+  padding-left: 78px;
+}
+
+/* Windows / Linux desktop app: the shell's three 46px buttons sit over the
+   bar's right end, so the bar's own controls stop short of them. */
+#popout-bar[data-shell-buttons] {
+  padding-right: calc(3 * 46px + 8px);
+}
+
+#popout-bar button,
+#popout-bar .popout-grip {
+  -webkit-app-region: no-drag;
+}
+
+/* The handle: dragged onto the main window, the session docks there. Out of
+   the drag region (above), which would swallow the mouse. */
+#popout-bar .popout-grip {
+  flex: none;
+  cursor: grab;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+}
+#popout-bar .popout-grip:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+#popout-bar .popout-grip:active {
+  cursor: grabbing;
+}
+
+/* The rail row's dot (SidebarRow.css), the same tones. */
+.popout-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--tone-neutral);
+}
+.popout-dot.tone-muted {
+  background: var(--tone-muted);
+}
+.popout-dot.tone-working,
+.popout-dot.tone-verified {
+  background: var(--tone-working);
+}
+.popout-dot.tone-attention {
+  background: var(--tone-attention);
+}
+.popout-dot.tone-waiting {
+  background: var(--tone-waiting);
+}
+.popout-dot.tone-broken {
+  background: var(--tone-broken);
+}
+.popout-dot.tone-verifying {
+  background: var(--tone-verifying, #8b6cf0);
+}
+.popout-dot.st-starting {
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+#popout-bar .popout-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The flexible middle: empty, so it is all window drag. */
+#popout-bar .popout-drag {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+#popout-bar .popout-back {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#popout-bar .popout-back:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.popout-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The window is the pane's frame: no card border or rounding inside it. */
+.popout-body > .pane.pane-embedded {
+  flex: 1 1 auto;
+  border-width: 0;
+  border-radius: 0;
+}
+
+.popout-loading,
+.popout-gone {
+  margin: auto;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.popout-gone p {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 15px;
+}
+.popout-gone .popout-gone-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+.popout-gone .popout-close {
+  height: 28px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.popout-gone .popout-close:hover {
+  border-color: var(--accent);
+}
