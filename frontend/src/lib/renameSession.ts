@@ -28,6 +28,7 @@ import { focusSpot, keepFocusAcrossRename, PANE_TERMINAL } from "./renameFocus";
 import { loadSkyLayout, renameSkyLine, saveSkyLayout, SKY_POS_KEY } from "./skyLayout";
 import { renameNodePos } from "./skyNodePos";
 import { toast } from "./toast";
+import { isPoppedOut, renamePopout } from "./popout";
 
 /** The title-keyed localStorage this moves (key → shape). Listed for a
  * reviewer (the inventory test pins it): a new title-keyed key belongs here
@@ -125,6 +126,9 @@ export function moveSessionTitle(from: string, to: string): void {
     delete next[from];
     return next;
   };
+
+  // Its own window (lib/popout), when it is in one, follows the new title.
+  if (isPoppedOut(from)) renamePopout(from, to);
 
   const s = useUi.getState();
   const patch: Record<string, unknown> = {};

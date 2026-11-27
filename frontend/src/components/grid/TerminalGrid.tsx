@@ -9,12 +9,16 @@ import { useShallow } from "zustand/react/shallow";
 import { effectiveViewMode, windowKey, useUi } from "../../state/store";
 import { releaseTerms } from "../../lib/terminals";
 import { dropActivity } from "../../lib/stage";
+import { SESSION_DRAG_MIME, usePoppedOut } from "../../lib/popout";
+import { dockSession } from "../../lib/sessionActions";
 import {
   computeVisibleSlots,
   DROP_PH,
   placeInGrid,
   previewRowsFor,
   reconcileGridRows,
+  withoutParked,
+  withParked,
   type DropSide,
 } from "./layout";
 import { Pane } from "./Pane";
@@ -44,6 +48,12 @@ function sentinelRef(p: SpecialPaneDesc): string {
   return (p.kind === "ext" ? p.extKey : p.session) || "";
 }
 
+/** The drag state's title while a session is dragged in from ANOTHER window
+ * (a pop-out's header, carrying {@link SESSION_DRAG_MIME}): which session is
+ * only readable at the drop, so the panes see this token — they show the drop
+ * slot for it exactly as for a pane of this grid. */
+export const FOREIGN_DRAG = "\u0000foreign";
+
 export interface DragCtx {
   dragTitle: string | null;
   start(title: string): void;
@@ -69,6 +79,8 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
     }))
   );
   const [drag, setDrag] = useState<{ dragTitle: string; targetTitle?: string; side?: DropSide } | null>(null);
+  // Sessions in windows of their own (lib/popout) take no slot here.
+  const popped = usePoppedOut();
 
   // A verify run never gets an ordinary pane. It is a real session (it needs a
   // worktree and an agent that can run commands) but it is not one you work in:
@@ -94,8 +106,9 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
         viewMode: effectiveViewMode(ui),
         mru: ui.mru,
         order: ui.order,
+        poppedOut: popped,
       }),
-    [workable, specialByKey, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
+    [workable, specialByKey, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order, popped]
   );
   const byTitle = useMemo(() => {
     const all = new Map(workable.map((i) => [i.title, i]));
@@ -110,10 +123,13 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
   // Reconcile the persisted row layout against that set.
   // (Skipped before the first snapshot: painting a stale [] would wipe the
   // persisted layout — the "windows reorder after reload" bug.)
+  // A popped-out session keeps its place in them, parked (layout.withParked):
+  // undrawn while it is out, and back in the same spot when it returns.
   const rows = useMemo(() => {
     if (!isSuccess) return ui.gridRows;
-    return reconcileGridRows(ui.gridRows, slotTitles);
-  }, [isSuccess, ui.gridRows, slotTitles]);
+    const live = new Set(workable.map((i) => i.title));
+    return reconcileGridRows(ui.gridRows, withParked(slotTitles, ui.gridRows, popped, live, ui.hidden));
+  }, [isSuccess, ui.gridRows, slotTitles, popped, workable, ui.hidden]);
   useEffect(() => {
     if (!isSuccess) return;
     if (JSON.stringify(rows) !== JSON.stringify(ui.gridRows)) ui.setGridRows(rows);
@@ -157,7 +173,9 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
         ),
       commit: () => {
         setDrag((d) => {
-          if (d?.targetTitle && d.side)
+          // A session from another window is placed by the grid's own drop
+          // (it reads the title there); nothing to move in these rows.
+          if (d?.targetTitle && d.side && d.dragTitle !== FOREIGN_DRAG)
             useUi
               .getState()
               .setGridRows(
@@ -171,16 +189,25 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
     [drag?.dragTitle]
   );
 
-  // Mid-drag: show the prospective layout with an empty slot.
+  // Mid-drag: show the prospective layout with an empty slot. Parked
+  // (popped-out) sessions are never drawn.
   const shownRows = useMemo(() => {
-    if (drag?.targetTitle && drag.side)
-      return previewRowsFor(rows, drag.dragTitle, drag.targetTitle, drag.side);
-    return rows;
-  }, [rows, drag]);
+    const r =
+      drag?.targetTitle && drag.side
+        ? previewRowsFor(rows, drag.dragTitle, drag.targetTitle, drag.side)
+        : rows;
+    return withoutParked(r, popped);
+  }, [rows, drag, popped]);
 
   const booting = !isSuccess;
   const noneAtAll = (instances || []).length === 0;
   const showEmpty = !booting && visible.length === 0 && specialPanes.length === 0;
+  // Nothing here because they are all in windows of their own (lib/popout),
+  // not because they were hidden: say so.
+  const allOut =
+    showEmpty &&
+    workable.some((i) => popped.has(i.title)) &&
+    workable.every((i) => popped.has(i.title) || ui.hidden.has(i.title));
   // The first-run card: while a required checklist step is still to do (the
   // server's GET /api/setup; its onboarded flag stands in until that lands).
   const { data: setup } = useSetup(!booting && noneAtAll);
@@ -194,9 +221,33 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
     <main
       id="grid"
       onDragOver={(ev) => {
-        if (drag) ev.preventDefault();
+        if (drag) {
+          ev.preventDefault();
+          return;
+        }
+        // A session dragged in from its own window (a pop-out's header): dock
+        // it here. The panes show where it would land, as for an inner drag.
+        if (ev.dataTransfer.types.includes(SESSION_DRAG_MIME)) {
+          ev.preventDefault();
+          ev.dataTransfer.dropEffect = "move";
+          setDrag({ dragTitle: FOREIGN_DRAG });
+        }
+      }}
+      onDragLeave={(ev) => {
+        // Left the grid without dropping: no slot is left open behind it.
+        if (drag?.dragTitle !== FOREIGN_DRAG) return;
+        const to = ev.relatedTarget as Node | null;
+        if (!to || !ev.currentTarget.contains(to)) setDrag(null);
       }}
       onDrop={(ev) => {
+        if (drag?.dragTitle === FOREIGN_DRAG) {
+          ev.preventDefault();
+          const title = ev.dataTransfer.getData(SESSION_DRAG_MIME);
+          const place = drag.targetTitle && drag.side ? { target: drag.targetTitle, side: drag.side } : undefined;
+          setDrag(null);
+          if (title && workable.some((i) => i.title === title)) dockSession(title, place);
+          return;
+        }
         if (drag) {
           ev.preventDefault();
           dragCtx.commit();
@@ -247,12 +298,15 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
             onClick={noneAtAll ? () => useUi.getState().openDialogFor("new-session") : undefined}
           >
             {/* What the Grid is for + New session (onboarding/GridEmpty). */}
-            {noneAtAll ? <GridEmpty /> : "All sessions hidden. Click a session's row in the sidebar to show it."}
+            {noneAtAll ? <GridEmpty /> : allOut ? ALL_OUT : "All sessions hidden. Click a session's row in the sidebar to show it."}
           </div>
         ))}
     </main>
   );
 }
+
+const ALL_OUT =
+  "Your sessions are in windows of their own. Drag one back here, or click its row in the sidebar to show it.";
 
 /** The grid token for a special pane. Defined in the store (windowKey), which
  * is what lets OPENING a window select it; re-exported here because the panes

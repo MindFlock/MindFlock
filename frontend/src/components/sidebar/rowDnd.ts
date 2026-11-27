@@ -15,6 +15,7 @@
  * phantom row. */
 
 import type { DragEvent } from "react";
+import { trackDrag } from "../grid/tearOff";
 
 export const ROW_MIME = "application/x-mf-row";
 
@@ -22,7 +23,16 @@ export interface RowDndCallbacks {
   onDragState(key: string | null): void;
   onDropCue(key: string, cue: "above" | "below" | null): void;
   onDropRow(dragKey: string, targetKey: string, before: boolean): void;
+  /** A session row only, where pop-outs are supported: the drag ended
+   * OUTSIDE the window (grid/tearOff) — tear the session off into a window
+   * of its own, around this screen point (`grabX` px from the row's left). */
+  onTearOff?(pt: { x?: number; y?: number }, grabX: number): void;
 }
+
+/** The row drag in flight, when it may be torn off. Module-level: the props
+ * are rebuilt on every render, and the drag's start re-renders the row. One
+ * drag at a time. */
+let tear: { key: string; track: ReturnType<typeof trackDrag>; grabX: number } | null = null;
 
 export function rowDndProps(key: string, cbs: RowDndCallbacks, draggable = true) {
   return {
@@ -32,10 +42,20 @@ export function rowDndProps(key: string, cbs: RowDndCallbacks, draggable = true)
       ev.dataTransfer.setData("text/plain", key);
       ev.dataTransfer.effectAllowed = "move" as const;
       cbs.onDragState(key);
+      tear = null;
+      if (cbs.onTearOff) {
+        const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+        tear = { key, track: trackDrag(), grabX: Math.min(ev.clientX - rect.left, 80) };
+      }
     },
-    onDragEnd: () => {
+    onDragEnd: (ev: DragEvent) => {
       cbs.onDragState(null);
       cbs.onDropCue(key, null);
+      const t = tear;
+      tear = null;
+      if (!t || t.key !== key) return;
+      const out = t.track.end({ dropEffect: ev.dataTransfer.dropEffect, screenX: ev.screenX, screenY: ev.screenY });
+      if (out) cbs.onTearOff?.(out, t.grabX);
     },
     onDragOver: (ev: DragEvent) => {
       if (!ev.dataTransfer.types.includes(ROW_MIME)) return;

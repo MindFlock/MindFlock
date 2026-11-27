@@ -439,6 +439,24 @@
   min-width: 0;
 }
 
+/* A card whose session is in a window of its own (lib/popout): one row that
+   goes to it, never a second terminal. */
+.skl-card-popped {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px 10px;
+  font-size: 12px;
+  color: var(--fl-ink-muted);
+}
+.skl-card-popped-words {
+  flex: 1;
+  min-width: 0;
+}
+.skl-card-popped > .test-btn {
+  flex: none;
+}
+
 .skl-resize {
   position: absolute;
   right: 0;

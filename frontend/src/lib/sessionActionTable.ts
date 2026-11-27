@@ -33,6 +33,7 @@ import {
   commitSession,
   copySession,
   deleteSession,
+  dockSession,
   hasPrSupport,
   hideSession,
   ideSession,
@@ -40,6 +41,7 @@ import {
   makePrSession,
   mergeSession,
   pauseSession,
+  popOutSession,
   pushSession,
   resumeSession,
 } from "./sessionActions";
@@ -49,6 +51,7 @@ import { focusQueueInput, isRemote } from "./playbooks";
 import { errMsg } from "./format";
 import { toast } from "./toast";
 import { errorPop } from "./errorPop";
+import { focusPopout, isPoppedOut, popoutSupported } from "./popout";
 import {
   ASK_WORKERS_KEYS,
   FLOCK_KEYS,
@@ -71,6 +74,8 @@ export interface ActionCtx {
   ideName: string;
   /** The pane is hidden (client-side). */
   hidden: boolean;
+  /** In a window of its own (lib/popout). */
+  popped: boolean;
 }
 
 const DEFAULT_CAPS: Caps = { git: true, tailscale: true, ticketing: true, github: true };
@@ -79,7 +84,7 @@ const DEFAULT_CAPS: Caps = { git: true, tailscale: true, ticketing: true, github
  * caches; the row passes what it already rendered from. */
 export function actionCtx(
   title: string,
-  opts: { inst?: Instance; caps?: Caps; ideName?: string; hidden?: boolean } = {}
+  opts: { inst?: Instance; caps?: Caps; ideName?: string; hidden?: boolean; popped?: boolean } = {}
 ): ActionCtx {
   const config = queryClient.getQueryData<Config>(["config"]);
   const inst = opts.inst ?? instances().find((r) => r.title === title);
@@ -92,6 +97,7 @@ export function actionCtx(
     prSupport: hasPrSupport(caps),
     ideName: opts.ideName ?? (config?.ide_name || "Cursor"),
     hidden: opts.hidden ?? useUi.getState().hidden.has(title),
+    popped: opts.popped ?? isPoppedOut(title),
   };
 }
 
@@ -295,6 +301,27 @@ export const SESSION_ACTIONS = {
     chord: "h",
     enabled: () => true,
     run: (t) => hideSession(t),
+  },
+  // Pop-out windows (lib/popout): a session in an OS window of its own, torn
+  // off like a browser tab — or by dragging its pane header (or rail row) out
+  // of the window. Offered where this window can open one (not on a phone,
+  // not in an old desktop app); once it is out, the way back and the way to it.
+  popout: {
+    label: "Move to new window",
+    note: "a window of its own; drag it back to dock",
+    enabled: (c) => !c.popped && !!c.inst && !c.inst.pending && popoutSupported(),
+    run: (t) => popOutSession(t),
+  },
+  dock: {
+    label: "Back to main window",
+    note: "closes its window; back in the grid",
+    enabled: (c) => c.popped,
+    run: (t) => dockSession(t),
+  },
+  showWindow: {
+    label: "Show its window",
+    enabled: (c) => c.popped,
+    run: (t) => void focusPopout(t),
   },
   // The Map tab: red zones, the plan, the blast radius. A plain open (no
   // file, no section) through store.openMap, which every "Open map" shares.

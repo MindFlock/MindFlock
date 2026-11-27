@@ -7,7 +7,9 @@
  *   Work     Message…, Queue prompt…
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
  *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
- *   Session  Rename…, Move to a folder… (this machine's own rows), Resume
+ *   Session  Rename…, Move to a folder… (this machine's own rows), Move to
+ *            new window (or, once it is in one: Back to main window, Show
+ *            its window — lib/popout), Resume
  *            (only on a paused session: there is no Pause here — the
  *            palette, `mindflock pause` and the API still pause), Workers…
  *            (the ONE entry for workers: it opens the picker under the pane's
@@ -302,6 +304,10 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
           : "Pauses the agent, moves the session's folder somewhere new, and resumes it there",
         run: () => openMoveSession(title),
       },
+    // Pop-out windows (lib/popout): out, or — once it is out — back, and to it.
+    fromTable("popout", { title: "Opens it in a window of its own (or drag its header out of this window)" }),
+    fromTable("dock", { title: "Closes its own window; it comes back to its place in the grid" }),
+    fromTable("showWindow", { title: "Brings its own window to the front" }),
     fromTable("resume", { note: actionNote("resume", ctx) }),
     fromTable("workers", {
       note: inst.flock ? "on every prompt" : undefined,
