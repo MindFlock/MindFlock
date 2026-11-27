@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Out of Fable: new sessions start on Opus.** When a session runs out of one model, MindFlock already switched that session to the next one down. Now it also remembers the model is used up until its reset. Until then, every new session, worker, route step, wake from sleep and restart on that account starts on Opus, without first hitting the limit. A session or account that picked its own model keeps it, and local models are never touched. After the reset, sessions start on Fable again.
+
+### Fixed
+
+- **The reset date in "resets Nov 30, 1am" is read.** Claude Code's current limit notice puts a comma before the time. The notice was still recognized, but its reset time came back unknown, so the "used up until…" toast left out the date.
+
 ## [0.14.36] - 2026-11-25
 
 ### Changed

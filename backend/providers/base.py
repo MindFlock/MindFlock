@@ -891,6 +891,13 @@ class BaseProvider:
         switch leaves no default behind."""
         return None
 
+    def model_launch_args(self, model: str) -> tuple:
+        """The flags that start a launch on ``model`` of :meth:`model_ladder`
+        (``--model opus``), used while a model above it is used up
+        (:mod:`backend.providers.model_spent`). ``()`` = this CLI can't be
+        told at launch."""
+        return ()
+
     def model_limit_patterns(self) -> Sequence[str]:
         """Regexes for a limit notice that names its model (a ``model``
         group). Default: :data:`usage_limits.MODEL_LIMIT_PATTERNS`."""

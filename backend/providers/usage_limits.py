@@ -148,7 +148,7 @@ _ABS = re.compile(
     r"reset\w*\s+(?:on\s+)?"
     r"(?:(?:mon|tues?|wednes|thurs?|fri|satur|sun)day,?\s+)?"
     r"(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
-    r"(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\s+)?"
+    r"(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?,?\s+)?"
     r"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?"
     r"(?:\s*\(([A-Za-z][A-Za-z_+\-/ ]{1,40})\))?",
     re.I,

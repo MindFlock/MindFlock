@@ -1372,7 +1372,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   on ONE model while the plan still has room (Claude Code: "your Fable limit
   resets Nov 30"), MindFlock types `/model opus` (the next model down: Fable →
   Opus → Sonnet → Haiku) and tells the agent to carry on with the request that
-  bounced ([session-engine.md](session-engine.md#one-model-runs-out)). Unset
+  bounced ([session-engine.md](session-engine.md#one-model-runs-out)). Until
+  that model resets, every new launch on the same account starts on the next
+  one down (`--model opus`; kept in `~/.mindflock/model-spent.json`). Unset
   reads as ON; `false` turns it off. Synced.
 - **Memory thresholds** (`general.memory_low_pct`, `general.memory_critical_pct`,
   `general.memory_sleep_minutes`; JSON / `PUT /api/settings`): when this

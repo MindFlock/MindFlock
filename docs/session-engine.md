@@ -999,9 +999,23 @@ retried after that, never in a loop). An account-wide limit names no model:
 that is the prompt queue's limit hold, untouched. A TOML provider opts in
 with `[usage] model_ladder = ["big", "small"]` and `model_switch = "/model
 {model}"`. Off with `general.model_downshift: false` (Settings → Agent
-orchestration) or `MINDFLOCK_MODEL_DOWNSHIFT=0`. The switch lasts for that
-agent process: a relaunch starts on the session's configured model again,
-and steps down again if that model is still spent.
+orchestration) or `MINDFLOCK_MODEL_DOWNSHIFT=0`.
+
+**Every launch remembers.** A limit notice the sweep reads is recorded in
+`~/.mindflock/model-spent.json` (`backend/providers/model_spent.py`): that
+model, used up until its reset ("resets Nov 30, 1am" → Nov 30 01:00 in the
+printed zone; 5 hours when the notice gives no readable reset), per account
+(keyed by `BaseProvider.model_default_file`, so two Claude accounts keep two
+allowances). Until then, every launch whose model would be the spent one
+starts on the next one down instead of bouncing off the same notice first:
+a new session, a spawned worker, a route step, a wake from sleep, a restart
+and a `--resume` all get `--model opus` (`BaseProvider.model_launch_args`).
+The flag rides with the auth-profile flags (`launch_script.profile_overlay`,
+which every launch path asks for), so a session's own `--model` (it comes
+later and the CLI takes the last) and a profile's model pin win, and a launch
+with local models on is never touched. The model a launch "would be" is the
+`model` in the CLI's default file, else the top of the ladder (the plan's
+default). Once the reset passes, launches are back on it by themselves.
 
 Claude Code's `/model opus` also SAVES the model as your default for every
 new session ("Set model to Opus 5.5 and saved as your default for new
