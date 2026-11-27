@@ -58,6 +58,7 @@ import { api } from "../api/client";
 import type { Config } from "../api/types";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
+import { isPopoutWindow } from "../lib/popout";
 import { reviveSession } from "../lib/revive";
 import { lostKeyboardNote } from "../lib/presence";
 import { clearAttention, updateTitleBadge, useTitleBadge } from "../lib/titleBadge";
@@ -213,7 +214,14 @@ export function redZoneToast(env: EventEnvelope, name: string): string | null {
   }
 }
 
+/** Mounted by the main window only: a pop-out window (lib/popout.ts) hears
+ * the same events, and a second set of toasts, OS notifications and title
+ * badges would say everything twice. */
 export function EventToasts() {
+  return isPopoutWindow() ? null : <MainWindowToasts />;
+}
+
+function MainWindowToasts() {
   useTitleBadge();
 
   useEffect(() => {

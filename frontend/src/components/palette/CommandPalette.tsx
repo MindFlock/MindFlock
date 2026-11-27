@@ -63,6 +63,9 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "duplicate",
   "branch",
   "hide",
+  "popout",
+  "showWindow",
+  "dock",
   "resume",
   "pause",
   "close",
@@ -74,6 +77,9 @@ const PALETTE_ACTIONS: SessionActionId[] = [
 
 /** Words people type for a verb whose label doesn't hold them. */
 const ACTION_KEYWORDS: Partial<Record<SessionActionId, string>> = {
+  popout: "pop out tear off detach separate window screen monitor",
+  dock: "dock attach back main window grid",
+  showWindow: "focus raise window pop out",
   askWorkers: "mindflock agents workers spawn team parallel flock request",
   flock: "mindflock agents workers spawn team parallel flock every prompt sticky",
 };

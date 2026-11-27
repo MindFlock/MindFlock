@@ -198,7 +198,10 @@ def check(srv, inst, title: str, row: dict, now: float, text: Optional[str] = No
         limit = provider.model_limit(text, now)
     except Exception:  # noqa: BLE001 — detection never breaks the sweep
         return None
-    if not limit or not limit.get("next"):
+    if not limit:
+        return None
+    _remember_spent(provider, inst, limit, now)
+    if not limit.get("next"):
         return None
     cmd = provider.model_switch_command(limit["next"])
     if not cmd:
@@ -214,6 +217,19 @@ def check(srv, inst, title: str, row: dict, now: float, text: Optional[str] = No
     if now - typed < TYPED_HOLD_S:
         return None
     return limit, cmd
+
+
+def _remember_spent(provider, inst, limit: dict, now: float) -> None:
+    """Every launch on this account skips the spent model until it resets
+    (providers.model_spent), not just the session that hit it."""
+    try:
+        from backend.providers import model_spent as _model_spent
+
+        key = provider.model_default_file(inst)
+        if key:
+            _model_spent.record(key, limit["model"], limit.get("reset_at"), now)
+    except Exception:  # noqa: BLE001 — never break the sweep
+        pass
 
 
 def _default_of(path: str) -> Tuple[bool, object]:

@@ -323,6 +323,32 @@ def local_overlay(program: str) -> tuple[dict, tuple]:
         return {}, ()
 
 
+def _spent_model_args(program: str, profile_id: str, args) -> tuple:
+    """``--model opus`` while this account's usual model is used up
+    (:mod:`backend.providers.model_spent`, recorded by the model-downshift
+    sweep), so the launch doesn't bounce off the same limit notice. Rides
+    with the profile's flags because every launch path (first start,
+    relaunch, launcher rewrite, the standalone command) asks for those. A
+    session's own ``--model`` comes after them and wins (the CLI takes the
+    last); a profile's model pin is in ``args`` and wins here. Never with
+    local models on: a model flag there is what keeps the session on this
+    machine."""
+    try:
+        l_env, l_args = local_overlay(program)
+        if l_env or l_args:
+            return ()
+        from types import SimpleNamespace
+
+        from . import model_spent
+        from . import resolve as _resolve
+
+        provider = _resolve(program)
+        inst = SimpleNamespace(ProfileId=profile_id or "")
+        return tuple(model_spent.launch_args(provider, inst, tuple(args)))
+    except Exception:  # noqa: BLE001 — a hint, never a reason a launch fails
+        return ()
+
+
 def profile_overlay(
     program: str, profile_id: str = "", model: str = ""
 ) -> tuple[dict, tuple]:
@@ -341,6 +367,7 @@ def profile_overlay(
         env, args = auth_profiles.launch_overlay(program, profile_id, model)
     except Exception:  # noqa: BLE001
         return {}, ()
+    args = tuple(args) + _spent_model_args(program, profile_id, args)
     if args:
         # Local models outrank an auth profile, on every launch path. The env
         # halves already resolve that way (callers merge ``{**prof, **local}``),

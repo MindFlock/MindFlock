@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { api } from "./api/client";
 import { setWheelDamping } from "./lib/terminals";
 import { installAliasSync } from "./lib/aliasSync";
+import { installPopoutRegistry } from "./lib/popout";
 
 /** How often a guest's page re-says which session it is on (the server
  * forgets a focus after 90 s: core.guests.FOCUS_TTL_S). */
@@ -113,6 +114,11 @@ export default function App() {
     if (isGuest === null) return;
     installAliasSync(isGuest);
   }, [isGuest]);
+
+  // Pop-out windows (lib/popout): keep the set of sessions in windows of
+  // their own current — the grid, the rail and selection read it. Once; the
+  // pop-out window itself never renders <App/>.
+  useEffect(() => installPopoutRegistry(), []);
 
   // A guest's page tells the owner where it is: the session it has selected,
   // on every change and every 30 s while open (core.guests.note_focus) — the

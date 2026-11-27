@@ -27460,6 +27460,16 @@ function noteRefused(fields, resOrErr = null) {
 	const why = refusalReason(resOrErr);
 	onRefused(fresh, "Your " + what + " are kept in this browser only — this device didn't save them" + (why ? ": " + why : "."));
 }
+function setPrefSender(fn) {
+	const prev = sender;
+	sender = fn;
+	return prev;
+}
+function setPrefBeacon(fn) {
+	const prev = beacon;
+	beacon = fn;
+	return prev;
+}
 var FIELDS$1 = new Set(PREF_MAP.map((p) => p.field));
 function dirtyFields(kv = storage$3()) {
 	const out = /* @__PURE__ */ new Set();
@@ -27581,6 +27591,285 @@ function flushPrefsOnHide(kv = storage$3()) {
 		else if (permanent(e)) settleFields(fields, sentGen, kv);
 	});
 }
+//#endregion
+//#region src/lib/shell.ts
+function winctl() {
+	if (typeof window === "undefined") return void 0;
+	return window.winctl;
+}
+async function isFullScreen() {
+	try {
+		return await winctl()?.isFullScreen?.() === true;
+	} catch {
+		return false;
+	}
+}
+function bridge$2() {
+	if (typeof window === "undefined") return void 0;
+	return window.mfshell;
+}
+function inShell() {
+	return !!bridge$2();
+}
+function isDevShell() {
+	return bridge$2()?.dev === true;
+}
+function hasNativeWindowControls() {
+	return bridge$2()?.nativeTitleBar === true;
+}
+function onFullScreenChanged(cb) {
+	const off = winctl()?.onFullScreenChanged?.(cb);
+	return typeof off === "function" ? off : () => {};
+}
+//#endregion
+//#region src/lib/popout.ts
+var POPOUT_PARAM = "popout";
+var CHANNEL = "mf-popouts";
+var HEARTBEAT_MS = 2e3;
+var EXPIRE_MS = 6500;
+var DEFAULT_SIZE = {
+	width: 900,
+	height: 640
+};
+var MIN_SIZE = {
+	width: 720,
+	height: 520
+};
+var MIN_MAIN_WIDTH = 760;
+function bridge$1() {
+	if (typeof window === "undefined") return void 0;
+	return window.mfwin;
+}
+function popoutTitle(search) {
+	const s = search ?? (typeof location !== "undefined" ? location.search : "");
+	try {
+		const t = new URLSearchParams(s).get(POPOUT_PARAM);
+		return t && t.trim() ? t : null;
+	} catch {
+		return null;
+	}
+}
+function isPopoutWindow() {
+	return popoutTitle() !== null;
+}
+function popoutUrl(title, origin) {
+	return `${origin ?? (typeof location !== "undefined" ? location.origin : "")}/?${POPOUT_PARAM}=${encodeURIComponent(title)}`;
+}
+function popoutSupported() {
+	if (typeof window === "undefined" || isPopoutWindow()) return false;
+	if (inShell()) return !!bridge$1();
+	if (typeof BroadcastChannel === "undefined") return false;
+	return (window.innerWidth || 0) > MIN_MAIN_WIDTH;
+}
+var usePopouts = create((set) => ({
+	titles: /* @__PURE__ */ new Set(),
+	set: (titles) => set({ titles: new Set(titles) })
+}));
+function usePoppedOut() {
+	return usePopouts((s) => s.titles);
+}
+function poppedOut() {
+	return usePopouts.getState().titles;
+}
+function isPoppedOut(title) {
+	return poppedOut().has(title);
+}
+var heard$1 = /* @__PURE__ */ new Map();
+var channel = null;
+var sweep = null;
+function chan() {
+	if (channel || typeof BroadcastChannel === "undefined") return channel;
+	try {
+		channel = new BroadcastChannel(CHANNEL);
+	} catch {
+		channel = null;
+	}
+	return channel;
+}
+function post$1(m) {
+	try {
+		chan()?.postMessage(m);
+	} catch {}
+}
+function publishHeard(now = Date.now()) {
+	for (const [t, at] of heard$1) if (now - at > EXPIRE_MS) heard$1.delete(t);
+	const next = [...heard$1.keys()].sort();
+	const cur = [...poppedOut()].sort();
+	if (next.join("\0") !== cur.join("\0")) usePopouts.getState().set(next);
+}
+var registryInstalled = false;
+function installPopoutRegistry() {
+	if (registryInstalled || isPopoutWindow() || typeof window === "undefined") return () => {};
+	registryInstalled = true;
+	const b = bridge$1();
+	if (b) {
+		const off = b.onChanged((titles) => usePopouts.getState().set(titles || []));
+		b.list().then((titles) => usePopouts.getState().set(titles || []), () => {});
+		return () => {
+			off();
+			registryInstalled = false;
+		};
+	}
+	const c = chan();
+	if (!c) return () => {};
+	const onMsg = (e) => {
+		const m = e.data;
+		if (!m || typeof m !== "object") return;
+		if (m.t === "here") {
+			heard$1.set(m.title, Date.now());
+			publishHeard();
+		} else if (m.t === "bye") {
+			heard$1.delete(m.title);
+			publishHeard();
+		}
+	};
+	c.addEventListener("message", onMsg);
+	post$1({ t: "who" });
+	sweep = setInterval(() => publishHeard(), HEARTBEAT_MS);
+	return () => {
+		c.removeEventListener("message", onMsg);
+		if (sweep) clearInterval(sweep);
+		sweep = null;
+		registryInstalled = false;
+	};
+}
+async function openPopout(title, at = {}) {
+	if (!title || !popoutSupported()) return false;
+	const width = Math.round(Math.max(at.width || DEFAULT_SIZE.width, MIN_SIZE.width));
+	const height = Math.round(Math.max(at.height || DEFAULT_SIZE.height, MIN_SIZE.height));
+	const b = bridge$1();
+	if (b) try {
+		return !!await b.open({
+			title,
+			x: at.x,
+			y: at.y,
+			width,
+			height
+		});
+	} catch {
+		return false;
+	}
+	const feats = [
+		`popup`,
+		`width=${width}`,
+		`height=${height}`
+	];
+	if (at.x != null) feats.push(`left=${Math.round(at.x)}`);
+	if (at.y != null) feats.push(`top=${Math.round(at.y)}`);
+	let w = null;
+	try {
+		w = window.open(popoutUrl(title), popoutName(title), feats.join(","));
+	} catch {
+		w = null;
+	}
+	if (!w) return false;
+	heard$1.set(title, Date.now());
+	publishHeard();
+	return true;
+}
+function focusPopout(title) {
+	if (!isPoppedOut(title)) return false;
+	const b = bridge$1();
+	if (b) {
+		b.focus(title).catch(() => {});
+		return true;
+	}
+	post$1({
+		t: "focus",
+		title
+	});
+	try {
+		window.open("", popoutName(title))?.focus();
+	} catch {}
+	return true;
+}
+function closePopout(title) {
+	const b = bridge$1();
+	if (b) {
+		b.close(title).catch(() => {});
+		return;
+	}
+	post$1({
+		t: "close",
+		title
+	});
+	heard$1.delete(title);
+	publishHeard();
+}
+function renamePopout(from, to) {
+	if (!from || !to || from === to) return;
+	const b = bridge$1();
+	if (b) {
+		b.rename(from, to).catch(() => {});
+		return;
+	}
+	if (heard$1.has(from)) {
+		heard$1.set(to, heard$1.get(from) || Date.now());
+		heard$1.delete(from);
+		publishHeard();
+	}
+	post$1({
+		t: "rename",
+		from,
+		to
+	});
+}
+function focusMainWindow() {
+	bridge$1()?.focusMain().catch(() => {});
+}
+function popoutName(title) {
+	let h = 0;
+	for (let i = 0; i < title.length; i++) h = h * 31 + title.charCodeAt(i) | 0;
+	return `mf-popout-${(h >>> 0).toString(36)}`;
+}
+function announcePopout(getTitle, h = {}) {
+	if (bridge$1()) return () => {};
+	const c = chan();
+	if (!c) return () => {};
+	const here = () => post$1({
+		t: "here",
+		title: getTitle()
+	});
+	const onMsg = (e) => {
+		const m = e.data;
+		if (!m || typeof m !== "object") return;
+		const me = getTitle();
+		if (m.t === "who") here();
+		else if (m.t === "focus" && m.title === me) try {
+			window.focus();
+		} catch {}
+		else if (m.t === "close" && m.title === me) h.onClose ? h.onClose() : window.close();
+		else if (m.t === "rename" && m.from === me) h.onRename?.(m.to);
+	};
+	c.addEventListener("message", onMsg);
+	here();
+	const beat = setInterval(here, HEARTBEAT_MS);
+	const bye = () => post$1({
+		t: "bye",
+		title: getTitle()
+	});
+	window.addEventListener("pagehide", bye);
+	return () => {
+		clearInterval(beat);
+		c.removeEventListener("message", onMsg);
+		window.removeEventListener("pagehide", bye);
+		bye();
+	};
+}
+function closeThisPopout() {
+	const title = popoutTitle();
+	const b = bridge$1();
+	if (b && title) {
+		b.close(title).catch(() => window.close());
+		return;
+	}
+	if (title) post$1({
+		t: "bye",
+		title
+	});
+	window.close();
+}
+var SESSION_DRAG_MIME = "application/x-mf-session";
 //#endregion
 //#region src/lib/paneHeader.ts
 var PANE_TABS = [
@@ -27899,12 +28188,14 @@ function firstRun(key) {
 	}
 }
 function save(key, value, stringify = true) {
+	if (isPopoutWindow()) return;
 	try {
 		localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
 	} catch {}
 	notePrefWrite(key);
 }
 function drop(key) {
+	if (isPopoutWindow()) return;
 	try {
 		localStorage.removeItem(key);
 	} catch {}
@@ -28612,6 +28903,10 @@ var DROP_PH = "\0drop";
 function viewCap(viewMode) {
 	return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
 }
+function offGrid(opts) {
+	const out = opts.poppedOut;
+	return (t) => opts.hidden.has(t) || !!out && out.has(t);
+}
 function capTitles(all, cap, mru) {
 	if (all.length <= cap) return all;
 	const byMru = mru.filter((t) => all.includes(t));
@@ -28621,13 +28916,14 @@ function capTitles(all, cap, mru) {
 }
 function computeVisible(instances, opts) {
 	const { rows } = orderedInstances(instances, opts.order);
-	const shown = rows.filter((i) => !opts.hidden.has(i.title));
+	const off = offGrid(opts);
+	const shown = rows.filter((i) => !off(i.title));
 	const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
 	const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
 	return shown.filter((i) => chosen.has(i.title));
 }
 function computeVisibleSlots(instances, specialKeys, opts) {
-	return capTitles(orderedKeys(instances.map((i) => i.title).concat(specialKeys), opts.order).filter((t) => !opts.hidden.has(t)), Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
+	return capTitles(orderedKeys(instances.map((i) => i.title).concat(specialKeys), opts.order).filter((t) => !offGrid(opts)(t)), Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
 }
 function balancedRows(titles) {
 	const n = titles.length;
@@ -28653,6 +28949,16 @@ function reconcileGridRows(prev, visibleTitles) {
 	if (!rows.length) return balancedRows(visibleTitles);
 	for (const t of incoming) rows = insertIntoGrid(rows, t);
 	return rows;
+}
+function withParked(slotTitles, prevRows, poppedOut, live, hidden) {
+	if (!poppedOut.size) return slotTitles;
+	const have = new Set(slotTitles);
+	const parked = prevRows.flat().filter((t) => poppedOut.has(t) && live.has(t) && !hidden.has(t) && !have.has(t));
+	return parked.length ? slotTitles.concat(parked) : slotTitles;
+}
+function withoutParked(rows, poppedOut) {
+	if (!poppedOut.size || !rows.some((r) => r.some((t) => poppedOut.has(t)))) return rows;
+	return rows.map((r) => r.filter((t) => !poppedOut.has(t))).filter((r) => r.length);
 }
 function insertBeside(prev, removeTitle, token, targetTitle, side) {
 	const rows = prev.map((r) => r.filter((t) => t !== removeTitle)).filter((r) => r.length);
@@ -32392,6 +32698,7 @@ var sessionActions_exports = /* @__PURE__ */ __exportAll({
 	deleteSession: () => deleteSession,
 	deletedToastText: () => deletedToastText,
 	divergedPush: () => divergedPush,
+	dockSession: () => dockSession,
 	failPendingSession: () => failPendingSession,
 	folderInUse: () => folderInUse,
 	folderInUseText: () => folderInUseText,
@@ -32412,6 +32719,7 @@ var sessionActions_exports = /* @__PURE__ */ __exportAll({
 	offerUrl: () => offerUrl,
 	openMoveSession: () => openMoveSession,
 	pauseSession: () => pauseSession,
+	popOutSession: () => popOutSession,
 	pushSession: () => pushSession,
 	rebaseRemoteAndPush: () => rebaseRemoteAndPush,
 	redZoneBreaches: () => redZoneBreaches,
@@ -32451,6 +32759,11 @@ function selectSession(title, opts) {
 		ui.setFocused(null);
 		return;
 	}
+	if (isPoppedOut(title)) {
+		focusPopout(title);
+		if (opts?.voice) ui.pulseRail(title);
+		return;
+	}
 	ui.setHidden(title, false);
 	const windowKeys = [
 		...ui.specialOpen.map((k) => windowKey(k)),
@@ -32461,7 +32774,8 @@ function selectSession(title, opts) {
 		hidden: ui.hidden,
 		viewMode: effectiveViewMode(ui),
 		mru: ui.mru,
-		order: ui.order
+		order: ui.order,
+		poppedOut: poppedOut()
 	});
 	const focused = ui.focused;
 	if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
@@ -32476,6 +32790,48 @@ function selectSession(title, opts) {
 	if (!opts?.noKeyboard) focusTerm(title);
 }
 setSessionSelector(selectSession);
+function popOutSession(title, at) {
+	if (!title || isPoppedOut(title)) {
+		if (title) focusPopout(title);
+		return;
+	}
+	const place = at ?? paneScreenRect(title);
+	openPopout(title, place).then((ok) => {
+		if (ok || !popoutSupported()) return;
+		toast("Your browser blocked the new window", {
+			duration: 8e3,
+			action: {
+				label: "Open in new window",
+				ariaLabel: "Open " + displayName(title) + " in a new window",
+				onClick: () => void openPopout(title, place).then((again) => {
+					if (!again) errorPop("Couldn’t open a new window", "Allow pop-ups for this site, then try again.");
+				})
+			}
+		});
+	});
+}
+function paneScreenRect(title) {
+	if (typeof document === "undefined") return {};
+	const pane = [...document.querySelectorAll("#grid .pane[data-title]")].find((el) => el.dataset.title === title);
+	if (!pane) return {};
+	const r = pane.getBoundingClientRect();
+	const chromeY = Math.max(0, window.outerHeight - window.innerHeight);
+	return {
+		x: window.screenX + r.left,
+		y: window.screenY + chromeY + r.top,
+		width: r.width,
+		height: r.height
+	};
+}
+function dockSession(title, place) {
+	if (!title) return;
+	closePopout(title);
+	if (isPoppedOut(title)) usePopouts.getState().set([...poppedOut()].filter((t) => t !== title));
+	const ui = useUi.getState();
+	if (place?.target && place.target !== title) ui.setGridRows(placeInGrid(ui.gridRows, title, place.target, place.side));
+	focusMainWindow();
+	selectSession(title);
+}
 function selectWindow(sent) {
 	useUi.getState().touchMru(sent);
 	requestAnimationFrame(() => {
@@ -35168,7 +35524,8 @@ function actionCtx(title, opts = {}) {
 		shared: !!inst?.peer_share,
 		prSupport: hasPrSupport(caps),
 		ideName: opts.ideName ?? (config?.ide_name || "Cursor"),
-		hidden: opts.hidden ?? useUi.getState().hidden.has(title)
+		hidden: opts.hidden ?? useUi.getState().hidden.has(title),
+		popped: opts.popped ?? isPoppedOut(title)
 	};
 }
 var cfg = () => queryClient.getQueryData(["config"]);
@@ -35323,6 +35680,23 @@ var SESSION_ACTIONS = {
 		chord: "h",
 		enabled: () => true,
 		run: (t) => hideSession(t)
+	},
+	popout: {
+		label: "Move to new window",
+		note: "a window of its own; drag it back to dock",
+		enabled: (c) => !c.popped && !!c.inst && !c.inst.pending && popoutSupported(),
+		run: (t) => popOutSession(t)
+	},
+	dock: {
+		label: "Back to main window",
+		note: "closes its window; back in the grid",
+		enabled: (c) => c.popped,
+		run: (t) => dockSession(t)
+	},
+	showWindow: {
+		label: "Show its window",
+		enabled: (c) => c.popped,
+		run: (t) => void focusPopout(t)
 	},
 	map: {
 		label: "Code map",
@@ -40142,6 +40516,10 @@ function _handleChordKey(e) {
 		return;
 	}
 	const focused = useUi.getState().focused;
+	if (chord.global && isPopoutWindow()) {
+		toast("Ctrl+K " + key.toUpperCase() + " works in the main window");
+		return;
+	}
 	if (chord.global) {
 		chord.run(focused);
 		return;
@@ -40160,6 +40538,10 @@ function workersKeyAllowed() {
 function closeFocused() {
 	const f = useUi.getState().focused;
 	if (f) sessionAction("close").run(f);
+}
+function backToMainWindow() {
+	focusMainWindow();
+	closeThisPopout();
 }
 var KEYMAP = [
 	{
@@ -40362,12 +40744,14 @@ var KEYMAP = [
 			"Reload the app (when a terminal isn’t focused)"
 		],
 		when: () => !terminalFocused(),
+		popout: true,
 		run: () => location.reload()
 	},
 	{
 		key: "k",
 		mod: true,
 		label: "the Ctrl+K chord prefix",
+		popout: true,
 		run: () => _enterChord()
 	},
 	{
@@ -40380,6 +40764,7 @@ var KEYMAP = [
 			"Close the focused session — moves it to Recently closed (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)"
 		],
 		when: () => endShortcutAllowed() && !threadComposerFocused(),
+		popout: () => backToMainWindow(),
 		run: () => closeFocused()
 	},
 	{
@@ -40399,6 +40784,7 @@ var KEYMAP = [
 			"Ask for workers — types the workers request into the focused session (finish it, or press Enter)"
 		],
 		when: () => workersKeyAllowed(),
+		popout: true,
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) runChordAction("askWorkers", f);
@@ -40415,6 +40801,7 @@ var KEYMAP = [
 			"Workers on every prompt — turn the focused session's Flock on or off"
 		],
 		when: () => workersKeyAllowed(),
+		popout: true,
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) runChordAction("flock", f);
@@ -40574,24 +40961,29 @@ function _dispatch(e) {
 	}
 	const norm = normKey(e.key || "");
 	const mod = e.ctrlKey || e.metaKey;
-	for (const b of KEYMAP) for (const t of effBindings(b)) {
-		if (normKey(t.key) !== norm) continue;
-		if (t.mod === "ctrl" ? !e.ctrlKey : t.mod ? !mod : mod) continue;
-		if (t.shift !== "any" && !!t.shift !== e.shiftKey) continue;
-		if (t.alt !== "any" && !!t.alt !== e.altKey) continue;
-		if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement) && !(b.holdable && terminalFocused())) continue;
-		if (b.when && !b.when()) return;
-		e.preventDefault();
-		e.stopPropagation();
-		if (b.holdable) {
-			if (e.repeat) return;
-			_release(b, e);
-			_held.set(b, t);
-			b.run(e, "down");
+	const popout = isPopoutWindow();
+	for (const b of KEYMAP) {
+		if (popout && !b.popout) continue;
+		for (const t of effBindings(b)) {
+			if (normKey(t.key) !== norm) continue;
+			if (t.mod === "ctrl" ? !e.ctrlKey : t.mod ? !mod : mod) continue;
+			if (t.shift !== "any" && !!t.shift !== e.shiftKey) continue;
+			if (t.alt !== "any" && !!t.alt !== e.altKey) continue;
+			if (t !== b && !t.mod && !t.alt && isEditingTarget(document.activeElement) && !(b.holdable && terminalFocused())) continue;
+			if (b.when && !b.when()) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (b.holdable) {
+				if (e.repeat) return;
+				_release(b, e);
+				_held.set(b, t);
+				b.run(e, "down");
+				return;
+			}
+			if (popout && typeof b.popout === "function") b.popout(e);
+			else b.run(e);
 			return;
 		}
-		b.run(e);
-		return;
 	}
 }
 function installKeymap(host) {
@@ -41214,10 +41606,10 @@ var settleFirstPull = () => {};
 var firstPrefsPull = new Promise((r) => {
 	settleFirstPull = r;
 });
-var installed$2 = false;
+var installed$3 = false;
 function installPrefsSync() {
-	if (installed$2) return;
-	installed$2 = true;
+	if (installed$3) return;
+	installed$3 = true;
 	setRefusedListener((_fields, message) => toast(message, { duration: 1e4 }));
 	pullPrefs();
 	if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -41705,6 +42097,73 @@ function installJoinLink() {
 	window.addEventListener("hashchange", take);
 }
 //#endregion
+//#region src/popout/boot.ts
+function parsed(raw) {
+	if (raw === null) return void 0;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return;
+	}
+}
+function themeIsLight(raw) {
+	if (raw === "light") return true;
+	if (raw === "dark") return false;
+	try {
+		return !!window.matchMedia?.("(prefers-color-scheme: light)").matches;
+	} catch {
+		return false;
+	}
+}
+function adoptStorageChange(key, raw) {
+	switch (key) {
+		case "cs_theme": {
+			const light = themeIsLight(raw);
+			document.documentElement.classList.toggle("light", light);
+			useUi.setState({ themeLight: light });
+			rethemeAll();
+			document.dispatchEvent(new Event(THEME_CHANGED));
+			return true;
+		}
+		case "cs_accent":
+		case "cs_surface":
+			applyStoredAppearance();
+			rethemeAll();
+			return true;
+		case "mf_keymap":
+			reloadKeymap();
+			return true;
+		case "mindflock.prompt_presets":
+			document.dispatchEvent(new Event(PRESETS_CHANGED));
+			return true;
+		case "mf_paneheader":
+			useUi.setState({ paneHeader: asPaneHeaderPref(parsed(raw)) });
+			return true;
+		case "mf_reduce_motion":
+			useUi.setState({ reduceMotion: parsed(raw) === true });
+			return true;
+		case "mf_aliases": {
+			const v = parsed(raw);
+			useUi.setState({ aliases: v && typeof v === "object" ? v : {} });
+			return true;
+		}
+		default: return false;
+	}
+}
+var neverSend = () => new Promise(() => {});
+var installed$2 = false;
+function installPopoutWindow() {
+	if (installed$2 || typeof window === "undefined") return;
+	installed$2 = true;
+	document.body.classList.add("popout-window");
+	setPrefSender(neverSend);
+	setPrefBeacon(neverSend);
+	window.addEventListener("storage", (e) => {
+		if (e.storageArea && e.storageArea !== window.localStorage) return;
+		adoptStorageChange(e.key, e.newValue);
+	});
+}
+//#endregion
 //#region src/lib/codemapSeen.ts
 var KEY$1 = "mf_codemap_seen";
 var MAX_TITLES = 200;
@@ -41908,6 +42367,7 @@ function renameMapKey(m, from, to, opts = {}) {
 	}
 }
 function persist(key, value) {
+	if (isPopoutWindow()) return;
 	try {
 		localStorage.setItem(key, JSON.stringify(value));
 	} catch {}
@@ -41937,6 +42397,7 @@ function moveSessionTitle(from, to) {
 		delete next[from];
 		return next;
 	};
+	if (isPoppedOut(from)) renamePopout(from, to);
 	const s = useUi.getState();
 	const patch = {};
 	const order = swap(s.order);
@@ -47572,6 +48033,19 @@ function followOldServerRun() {
 //#region src/whatsNew/releases.ts
 var RELEASES = [
 	{
+		version: "0.14.37",
+		date: "2026-11-27",
+		big: true,
+		headline: "Put any session on its own screen.",
+		features: [{
+			title: "Pop-out windows",
+			body: "Drag a session's pane header out of the window, like a browser tab, and it opens in a window of its own that you can put on another screen. Drag it back onto the grid, or press Back to main window, and it returns to the spot it left."
+		}, {
+			title: "Out of one model, on to the next",
+			body: "When a session runs out of Fable, every new session and restart on that account now starts on Opus until Fable is back, instead of hitting the limit first."
+		}]
+	},
+	{
 		version: "0.14.8",
 		date: "2026-11-11",
 		big: false,
@@ -53129,6 +53603,9 @@ var PALETTE_ACTIONS = [
 	"duplicate",
 	"branch",
 	"hide",
+	"popout",
+	"showWindow",
+	"dock",
 	"resume",
 	"pause",
 	"close",
@@ -53138,6 +53615,9 @@ var PALETTE_ACTIONS = [
 	"merge"
 ];
 var ACTION_KEYWORDS = {
+	popout: "pop out tear off detach separate window screen monitor",
+	dock: "dock attach back main window grid",
+	showWindow: "focus raise window pop out",
 	askWorkers: "mindflock agents workers spawn team parallel flock request",
 	flock: "mindflock agents workers spawn team parallel flock every prompt sticky"
 };
@@ -61008,7 +61488,7 @@ function resolveSession(name, titles, nameOf = displayName) {
 	const want = normLabel(name);
 	return titles.find((t) => normLabel(t) === want) || titles.find((t) => normLabel(nameOf(t)) === want) || null;
 }
-var NO_HOST = {
+var NO_HOST$1 = {
 	togglePalette: () => useUi.getState().openDialogFor("palette"),
 	toggleShortcuts: () => useUi.getState().openDialogFor("shortcuts"),
 	focusFilter: () => {},
@@ -61020,7 +61500,7 @@ function paletteCommands() {
 	try {
 		const acts = buildPaletteActions({
 			config: queryClient.getQueryData(["config"]),
-			host: keymapHost() || NO_HOST,
+			host: keymapHost() || NO_HOST$1,
 			extensions: extensionsNow()
 		});
 		const seen = /* @__PURE__ */ new Set();
@@ -63523,7 +64003,7 @@ function TopBarMic() {
 }
 //#endregion
 //#region src/lib/desktopNotify.ts
-function bridge$1() {
+function bridge() {
 	if (typeof window === "undefined") return null;
 	const w = window;
 	return w.mfnotify && typeof w.mfnotify.show === "function" ? w.mfnotify : null;
@@ -63623,7 +64103,8 @@ function desktopNoteFor(event, data, env) {
 var SESSION_NOTE_GAP_MS = 3e4;
 var sessionNotedAt = /* @__PURE__ */ new Map();
 function desktopNotify(event, data, env) {
-	const b = bridge$1();
+	if (isPopoutWindow()) return false;
+	const b = bridge();
 	if (!b) return false;
 	if (typeof document !== "undefined" && document.hasFocus()) return false;
 	const n = desktopNoteFor(event, data, env);
@@ -63651,7 +64132,8 @@ function openNotifyTarget(target) {
 	else if (target === "update") openSettings("advanced");
 }
 function installDesktopNotifyClicks() {
-	const b = bridge$1();
+	if (isPopoutWindow()) return () => {};
+	const b = bridge();
 	if (!b || typeof b.onClick !== "function") return () => {};
 	const off = b.onClick((target) => openNotifyTarget(String(target || "")));
 	return typeof off === "function" ? off : () => {};
@@ -63845,6 +64327,7 @@ function updateFavicon(n) {
 	} catch {}
 }
 function updateTitleBadge() {
+	if (isPopoutWindow()) return;
 	const want = badgeWanted();
 	for (const t of [...attentionUnseen]) if (!want.has(t)) attentionUnseen.delete(t);
 	const looking = document.hasFocus() ? useUi.getState().focused : "";
@@ -64446,6 +64929,9 @@ function redZoneToast(env, name) {
 	}
 }
 function EventToasts() {
+	return isPopoutWindow() ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MainWindowToasts, {});
+}
+function MainWindowToasts() {
 	useTitleBadge();
 	(0, import_react.useEffect)(() => {
 		const ev = window.mindflock?.events;
@@ -64811,36 +65297,6 @@ function EventToasts() {
 		return () => unsubs.forEach((u) => u());
 	}, []);
 	return null;
-}
-//#endregion
-//#region src/lib/shell.ts
-function winctl() {
-	if (typeof window === "undefined") return void 0;
-	return window.winctl;
-}
-async function isFullScreen() {
-	try {
-		return await winctl()?.isFullScreen?.() === true;
-	} catch {
-		return false;
-	}
-}
-function bridge() {
-	if (typeof window === "undefined") return void 0;
-	return window.mfshell;
-}
-function inShell() {
-	return !!bridge();
-}
-function isDevShell() {
-	return bridge()?.dev === true;
-}
-function hasNativeWindowControls() {
-	return bridge()?.nativeTitleBar === true;
-}
-function onFullScreenChanged(cb) {
-	const off = winctl()?.onFullScreenChanged?.(cb);
-	return typeof off === "function" ? off : () => {};
 }
 //#endregion
 //#region src/components/palette/ShortcutsSheet.tsx
@@ -66795,8 +67251,78 @@ function withHubDrop(title, dnd, enabled = true) {
 	};
 }
 //#endregion
+//#region src/components/grid/tearOff.ts
+var NO_TRAIL = {
+	left: false,
+	lastX: null,
+	lastY: null
+};
+function dragEndedOutside(end, win, trail = NO_TRAIL) {
+	if (end.dropEffect !== "none") return null;
+	const zero = !end.screenX && !end.screenY;
+	const x = zero ? trail.lastX : end.screenX;
+	const y = zero ? trail.lastY : end.screenY;
+	const known = x != null && y != null;
+	if (known && (x < win.screenX || y < win.screenY || x >= win.screenX + win.outerWidth || y >= win.screenY + win.outerHeight)) return {
+		x,
+		y
+	};
+	if (zero && trail.left) return known ? {
+		x,
+		y
+	} : {};
+	return null;
+}
+function trackDrag() {
+	const trail = {
+		left: false,
+		lastX: null,
+		lastY: null
+	};
+	const at = (ev) => {
+		if (ev.screenX || ev.screenY) {
+			trail.lastX = ev.screenX;
+			trail.lastY = ev.screenY;
+		}
+	};
+	const onDrag = (ev) => at(ev);
+	const onOver = (ev) => {
+		trail.left = false;
+		at(ev);
+	};
+	const onLeave = (ev) => {
+		if (!ev.relatedTarget) trail.left = true;
+	};
+	document.addEventListener("drag", onDrag, true);
+	document.addEventListener("dragover", onOver, true);
+	document.addEventListener("dragleave", onLeave, true);
+	let done = false;
+	return { end(ev) {
+		if (!done) {
+			done = true;
+			document.removeEventListener("drag", onDrag, true);
+			document.removeEventListener("dragover", onOver, true);
+			document.removeEventListener("dragleave", onLeave, true);
+		}
+		return dragEndedOutside(ev, window, trail);
+	} };
+}
+function tearOffPlacement(pt, grabX, size) {
+	const at = {};
+	if (pt.x != null && pt.y != null) {
+		at.x = Math.round(pt.x - Math.max(0, grabX));
+		at.y = Math.round(pt.y - 12);
+	}
+	if (size && size.width > 0 && size.height > 0) {
+		at.width = Math.round(size.width);
+		at.height = Math.round(size.height);
+	}
+	return at;
+}
+//#endregion
 //#region src/components/sidebar/rowDnd.ts
 var ROW_MIME$1 = "application/x-mf-row";
+var tear = null;
 function rowDndProps(key, cbs, draggable = true) {
 	return {
 		draggable,
@@ -66805,10 +67331,28 @@ function rowDndProps(key, cbs, draggable = true) {
 			ev.dataTransfer.setData("text/plain", key);
 			ev.dataTransfer.effectAllowed = "move";
 			cbs.onDragState(key);
+			tear = null;
+			if (cbs.onTearOff) {
+				const rect = ev.currentTarget.getBoundingClientRect();
+				tear = {
+					key,
+					track: trackDrag(),
+					grabX: Math.min(ev.clientX - rect.left, 80)
+				};
+			}
 		},
-		onDragEnd: () => {
+		onDragEnd: (ev) => {
 			cbs.onDragState(null);
 			cbs.onDropCue(key, null);
+			const t = tear;
+			tear = null;
+			if (!t || t.key !== key) return;
+			const out = t.track.end({
+				dropEffect: ev.dataTransfer.dropEffect,
+				screenX: ev.screenX,
+				screenY: ev.screenY
+			});
+			if (out) cbs.onTearOff?.(out, t.grabX);
 		},
 		onDragOver: (ev) => {
 			if (!ev.dataTransfer.types.includes(ROW_MIME$1)) return;
@@ -69369,6 +69913,9 @@ function sessionMenu$1(inst, ctx, opts = {}) {
 			title: moving ? "Being moved — it resumes in its new folder when the move is done" : "Pauses the agent, moves the session's folder somewhere new, and resumes it there",
 			run: () => openMoveSession(title)
 		},
+		fromTable("popout", { title: "Opens it in a window of its own (or drag its header out of this window)" }),
+		fromTable("dock", { title: "Closes its own window; it comes back to its place in the grid" }),
+		fromTable("showWindow", { title: "Brings its own window to the front" }),
 		fromTable("resume", { note: actionNote("resume", ctx) }),
 		fromTable("workers", {
 			note: inst.flock ? "on every prompt" : void 0,
@@ -70914,7 +71461,7 @@ function moveRowFocus(from, dir) {
 	const at = rows.indexOf(from);
 	(dir === "first" ? rows[0] : dir === "last" ? rows[rows.length - 1] : rows[at + (dir === "up" ? -1 : 1)])?.focus();
 }
-var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbered = true, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
+var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbered = true, onScreen: onScreenHere, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
 	const expanded = !!menuAt;
 	const kebab = (0, import_react.useRef)(null);
@@ -70935,6 +71482,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const { data: config } = useConfig();
 	const focused = useUi((s) => s.focused);
 	const hidden = useUi((s) => s.hidden.has(inst.title));
+	const popped = usePopouts((s) => s.titles.has(inst.title));
 	const aliases = useUi((s) => s.aliases);
 	const alias = aliases[inst.title];
 	const picking = useUi((s) => s.bulkMode);
@@ -71025,6 +71573,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		selectSession(title, { noKeyboard: true });
 		useUi.getState().setLastTab(title, "shell");
 	};
+	const onScreen = onScreenHere || popped;
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
 	const askedWords = !answering && !onScreen && !missing && !paused ? askedQuestion(inst) : void 0;
 	const task = taskLineOf(inst).text;
@@ -71039,7 +71588,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	useNow(wait ? 3e4 : false);
 	useNow(backgroundJobs(inst).some((j) => expectOf(j)) ? 6e4 : false);
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
-	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
+	const disconnected = inst.status === "running" && onScreenHere && agentWs === "disconnected";
 	const mapSeen = (0, import_react.useSyncExternalStore)(subscribeCodemapSeen, (0, import_react.useCallback)(() => codemapSeenAt(title), [title]));
 	const extra = railExtraChips(check, caps.git ? redZoneChip(inst.redzone, mapSeen) : null, {
 		integrated: runTask?.state === "integrated",
@@ -71056,7 +71605,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		inst,
 		caps,
 		ideName,
-		hidden
+		hidden,
+		popped
 	});
 	const openAtKebab = (keyboard) => {
 		const b = kebab.current?.getBoundingClientRect();
@@ -71121,7 +71671,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		const next = verdict.name;
 		renameSession(title, next, { plain: label.text });
 	};
-	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (offlinePeer ? " peer-gone" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
+	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (popped ? " is-popped" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (offlinePeer ? " peer-gone" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: rowCls,
@@ -71163,7 +71713,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 			...withHubDrop(title, rowDndProps(title, {
 				onDragState,
 				onDropCue,
-				onDropRow
+				onDropRow,
+				onTearOff: !pending && !offlinePeer && !missing && !popped && popoutSupported() ? (pt, grabX) => popOutSession(title, tearOffPlacement(pt, grabX)) : void 0
 			}, !editing), !pending && !offlinePeer),
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "inst-row",
@@ -71617,6 +72168,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						"aria-label": rz.title,
 						onClick: (e) => act(() => useUi.getState().openMap(title, zoneChipFocus(inst.redzone, rz)), e),
 						children: rz.label
+					}),
+					popped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "stagechip popchip",
+						title: "In its own window — click to show it",
+						"aria-label": "In its own window — show " + shown,
+						onClick: (e) => act(() => void focusPopout(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: "⧉"
 					}),
 					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						ref: kebab,
@@ -76164,18 +76724,21 @@ function Sidebar({ onOpenChat }) {
 		windows,
 		order
 	]);
+	const popped = usePoppedOut();
 	const onScreen = (0, import_react.useMemo)(() => new Set(computeVisible(instances, {
 		hidden: ui.hidden,
 		viewMode: effectiveViewMode(ui),
 		mru: ui.mru,
-		order: ui.order
+		order: ui.order,
+		poppedOut: popped
 	}).map((i) => i.title)), [
 		instances,
 		ui.hidden,
 		ui.viewMode,
 		ui.narrow,
 		ui.mru,
-		ui.order
+		ui.order,
+		popped
 	]);
 	const remoteDevs = devices?.devices || [];
 	const peers = (0, import_react.useMemo)(() => peerGroups(filtered), [filtered]);
@@ -110856,6 +111419,7 @@ function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) 
 		newestReport
 	]);
 	const paneRef = (0, import_react.useRef)(null);
+	const tear = (0, import_react.useRef)(null);
 	const headDrag = embedded ? {} : {
 		draggable: true,
 		onDragStart: (ev) => {
@@ -110866,8 +111430,31 @@ function PaneImpl({ inst, drag = NO_DRAG, dragging = false, embedded = false }) 
 			ev.dataTransfer.setData("text/plain", title);
 			ev.dataTransfer.effectAllowed = "move";
 			drag.start(title);
+			tear.current = null;
+			if (!missing && !inst.pending && popoutSupported() && paneRef.current) {
+				const r = paneRef.current.getBoundingClientRect();
+				tear.current = {
+					track: trackDrag(),
+					grabX: ev.clientX - r.left,
+					size: {
+						width: r.width,
+						height: r.height
+					}
+				};
+			}
 		},
-		onDragEnd: () => drag.end()
+		onDragEnd: (ev) => {
+			drag.end();
+			const t = tear.current;
+			tear.current = null;
+			if (!t) return;
+			const out = t.track.end({
+				dropEffect: ev.dataTransfer.dropEffect,
+				screenX: ev.screenX,
+				screenY: ev.screenY
+			});
+			if (out) popOutSession(title, tearOffPlacement(out, t.grabX, t.size));
+		}
 	};
 	const paneDrag = embedded ? {} : {
 		onDragOver: (ev) => {
@@ -112404,6 +112991,7 @@ function GridEmpty() {
 function sentinelRef(p) {
 	return (p.kind === "ext" ? p.extKey : p.session) || "";
 }
+var FOREIGN_DRAG = "\0foreign";
 function TerminalGrid({ specialPanes }) {
 	const { data: instances, isSuccess } = useInstances();
 	const { data: config } = useConfig();
@@ -112417,13 +113005,15 @@ function TerminalGrid({ specialPanes }) {
 		setGridRows: s.setGridRows
 	})));
 	const [drag, setDrag] = (0, import_react.useState)(null);
+	const popped = usePoppedOut();
 	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i)), [instances]);
 	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])), [specialPanes]);
 	const slotTitles = (0, import_react.useMemo)(() => computeVisibleSlots(workable, [...specialByKey.keys()], {
 		hidden: ui.hidden,
 		viewMode: effectiveViewMode(ui),
 		mru: ui.mru,
-		order: ui.order
+		order: ui.order,
+		poppedOut: popped
 	}), [
 		workable,
 		specialByKey,
@@ -112431,7 +113021,8 @@ function TerminalGrid({ specialPanes }) {
 		ui.viewMode,
 		ui.narrow,
 		ui.mru,
-		ui.order
+		ui.order,
+		popped
 	]);
 	const byTitle = (0, import_react.useMemo)(() => {
 		const all = new Map(workable.map((i) => [i.title, i]));
@@ -112440,11 +113031,15 @@ function TerminalGrid({ specialPanes }) {
 	const visible = (0, import_react.useMemo)(() => [...byTitle.values()], [byTitle]);
 	const rows = (0, import_react.useMemo)(() => {
 		if (!isSuccess) return ui.gridRows;
-		return reconcileGridRows(ui.gridRows, slotTitles);
+		const live = new Set(workable.map((i) => i.title));
+		return reconcileGridRows(ui.gridRows, withParked(slotTitles, ui.gridRows, popped, live, ui.hidden));
 	}, [
 		isSuccess,
 		ui.gridRows,
-		slotTitles
+		slotTitles,
+		popped,
+		workable,
+		ui.hidden
 	]);
 	(0, import_react.useEffect)(() => {
 		if (!isSuccess) return;
@@ -112480,19 +113075,23 @@ function TerminalGrid({ specialPanes }) {
 		} : d),
 		commit: () => {
 			setDrag((d) => {
-				if (d?.targetTitle && d.side) useUi.getState().setGridRows(placeInGrid(useUi.getState().gridRows, d.dragTitle, d.targetTitle, d.side));
+				if (d?.targetTitle && d.side && d.dragTitle !== FOREIGN_DRAG) useUi.getState().setGridRows(placeInGrid(useUi.getState().gridRows, d.dragTitle, d.targetTitle, d.side));
 				return null;
 			});
 		},
 		end: () => setDrag(null)
 	}), [drag?.dragTitle]);
 	const shownRows = (0, import_react.useMemo)(() => {
-		if (drag?.targetTitle && drag.side) return previewRowsFor(rows, drag.dragTitle, drag.targetTitle, drag.side);
-		return rows;
-	}, [rows, drag]);
+		return withoutParked(drag?.targetTitle && drag.side ? previewRowsFor(rows, drag.dragTitle, drag.targetTitle, drag.side) : rows, popped);
+	}, [
+		rows,
+		drag,
+		popped
+	]);
 	const booting = !isSuccess;
 	const noneAtAll = (instances || []).length === 0;
 	const showEmpty = !booting && visible.length === 0 && specialPanes.length === 0;
+	const allOut = showEmpty && workable.some((i) => popped.has(i.title)) && workable.every((i) => popped.has(i.title) || ui.hidden.has(i.title));
 	const { data: setup } = useSetup(!booting && noneAtAll);
 	const firstRun = showSetupCard({
 		sessions: instances ? instances.length : -1,
@@ -112502,9 +113101,33 @@ function TerminalGrid({ specialPanes }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "grid",
 		onDragOver: (ev) => {
-			if (drag) ev.preventDefault();
+			if (drag) {
+				ev.preventDefault();
+				return;
+			}
+			if (ev.dataTransfer.types.includes(SESSION_DRAG_MIME)) {
+				ev.preventDefault();
+				ev.dataTransfer.dropEffect = "move";
+				setDrag({ dragTitle: FOREIGN_DRAG });
+			}
+		},
+		onDragLeave: (ev) => {
+			if (drag?.dragTitle !== FOREIGN_DRAG) return;
+			const to = ev.relatedTarget;
+			if (!to || !ev.currentTarget.contains(to)) setDrag(null);
 		},
 		onDrop: (ev) => {
+			if (drag?.dragTitle === FOREIGN_DRAG) {
+				ev.preventDefault();
+				const title = ev.dataTransfer.getData(SESSION_DRAG_MIME);
+				const place = drag.targetTitle && drag.side ? {
+					target: drag.targetTitle,
+					side: drag.side
+				} : void 0;
+				setDrag(null);
+				if (title && workable.some((i) => i.title === title)) dockSession(title, place);
+				return;
+			}
 			if (drag) {
 				ev.preventDefault();
 				dragCtx.commit();
@@ -112555,11 +113178,12 @@ function TerminalGrid({ specialPanes }) {
 				"data-mode": "plain",
 				className: noneAtAll ? "clickable" : "",
 				onClick: noneAtAll ? () => useUi.getState().openDialogFor("new-session") : void 0,
-				children: noneAtAll ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GridEmpty, {}) : "All sessions hidden. Click a session's row in the sidebar to show it."
+				children: noneAtAll ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GridEmpty, {}) : allOut ? ALL_OUT : "All sessions hidden. Click a session's row in the sidebar to show it."
 			}))
 		]
 	});
 }
+var ALL_OUT = "Your sessions are in windows of their own. Drag one back here, or click its row in the sidebar to show it.";
 function sentinel(kind, ref = "") {
 	return windowKey(kind, ref);
 }
@@ -155612,6 +156236,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 	const grab = (0, import_react.useRef)(null);
 	const [live, setLive] = (0, import_react.useState)(null);
 	const cur = live || clampPane(w, h);
+	const popped = usePopouts((s) => s.titles.has(inst.title));
 	const z = zoom || 1;
 	const down = (e) => {
 		if (e.button !== 0) return;
@@ -155645,7 +156270,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 		"data-no-drag": true,
 		style: {
 			width: cur.w,
-			height: cur.h + CARD_HEAD_H
+			height: popped ? void 0 : cur.h + CARD_HEAD_H
 		},
 		onDoubleClick: (e) => {
 			const t = e.target;
@@ -155670,7 +156295,26 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 					children: "▣"
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			popped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "skl-card-popped",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						"aria-hidden": "true",
+						children: "⧉"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-card-popped-words",
+						children: "In its own window"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => focusPopout(inst.title),
+						title: "Bring its window to the front",
+						children: "Show"
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "skl-card-pane",
 				style: { height: cur.h },
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pane, {
@@ -155678,7 +156322,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 					embedded: true
 				}, inst.title)
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			!popped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "skl-resize",
 				role: "separator",
 				tabIndex: 0,
@@ -164813,6 +165457,7 @@ function App() {
 		if (isGuest === null) return;
 		installAliasSync(isGuest);
 	}, [isGuest]);
+	(0, import_react.useEffect)(() => installPopoutRegistry(), []);
 	const focusedTitle = focused || "";
 	const guestNamed = !!config?.guest?.name;
 	(0, import_react.useEffect)(() => {
@@ -164980,6 +165625,276 @@ function App() {
 	] });
 }
 //#endregion
+//#region src/popout/PopoutApp.tsx
+var GONE_CLOSE_MS = 5e3;
+var FOCUS_TRY_MS = 4e3;
+var POPOUT_DIALOGS = /* @__PURE__ */ new Set([
+	"commit",
+	"make-pr",
+	"move"
+]);
+var NO_HOST = {
+	togglePalette: () => {},
+	toggleShortcuts: () => {},
+	focusFilter: () => {},
+	cycleWindow: () => {},
+	rowAt: () => null,
+	openDoctor: () => {}
+};
+function searchWithTitle(search, to) {
+	const p = new URLSearchParams(search);
+	p.set(POPOUT_PARAM, to);
+	return "?" + p.toString();
+}
+function shownName(title, inst, alias) {
+	if (alias) return alias;
+	if (!inst) return title;
+	return sessionLabel(inst.display_title || inst.title, inst.branch || "").text || title;
+}
+function onHandleDragStart(e, title) {
+	e.dataTransfer.setData(SESSION_DRAG_MIME, title);
+	e.dataTransfer.setData("text/plain", title);
+	e.dataTransfer.effectAllowed = "move";
+}
+function StatusDot({ inst }) {
+	const { data: setup } = useSetup();
+	const blocked = agentBlocked(inst, setup?.logins);
+	const ss = blocked ? agentBlockedState(blocked) : deriveSessionState(inst);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "popout-dot tone-" + ss.tone + " st-" + ss.state,
+		title: ss.label,
+		"aria-label": ss.label
+	});
+}
+function PopoutBar({ title, name, inst, macLights = false, shellButtons = false, onBack }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "popout-bar",
+		"data-mac-lights": macLights ? "" : void 0,
+		"data-shell-buttons": shellButtons ? "" : void 0,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "popout-grip",
+				draggable: true,
+				title: "Drag onto the main window to put it back",
+				"aria-label": "Drag back to the main window",
+				onDragStart: (e) => onHandleDragStart(e, title),
+				children: "⠿"
+			}),
+			inst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusDot, { inst }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "popout-name",
+				title,
+				children: name
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "popout-drag" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "popout-back",
+				title: "Back to main window (Ctrl+W)",
+				onClick: onBack,
+				children: "Back to main window"
+			})
+		]
+	});
+}
+function GoneNotice({ name, onClose }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "popout-gone",
+		role: "status",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				"“",
+				name,
+				"” was closed."
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "popout-gone-sub",
+				children: "This window closes in a few seconds."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "popout-close",
+				onClick: onClose,
+				autoFocus: true,
+				children: "Close"
+			})
+		]
+	});
+}
+function PopoutApp() {
+	const [title, setTitle] = (0, import_react.useState)(() => popoutTitle() || "");
+	const titleRef = (0, import_react.useRef)(title);
+	titleRef.current = title;
+	const { data: instances } = useInstances();
+	const inst = instances?.find((i) => i.title === title);
+	const name = shownName(title, inst, useUi((s) => s.aliases[title]));
+	const gone = !!instances && !inst;
+	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
+	const [shellButtons] = (0, import_react.useState)(() => inShell() && !hasNativeWindowControls());
+	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!mac) return;
+		let live = true;
+		isFullScreen().then((f) => {
+			if (live) setFullScreen(f);
+		});
+		const off = onFullScreenChanged(setFullScreen);
+		return () => {
+			live = false;
+			off();
+		};
+	}, [mac]);
+	const rename = (0, import_react.useRef)((to) => {
+		if (!to || to === titleRef.current) return;
+		titleRef.current = to;
+		setTitle(to);
+		try {
+			history.replaceState(history.state, "", location.pathname + searchWithTitle(location.search, to) + location.hash);
+		} catch {}
+	}).current;
+	(0, import_react.useEffect)(() => announcePopout(() => titleRef.current, {
+		onClose: () => closeThisPopout(),
+		onRename: rename
+	}), [rename]);
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		const isReplay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
+		const offs = [
+			ev.subscribe("session.renamed", (env) => {
+				const r = realRename(env);
+				if (!r || r.from !== titleRef.current) return;
+				if (isReplay(env)) {
+					const rows = queryClient.getQueryData(["instances"]);
+					if (!rows || !rows.some((x) => x.title === r.to) || rows.some((x) => x.title === r.from)) return;
+				}
+				rename(r.to);
+				refreshInstances();
+			}),
+			ev.subscribe("session.activity_changed", (env) => {
+				if (env.session !== titleRef.current) return;
+				forceActivity(env.session, env.new || "idle");
+				refreshInstances();
+			}),
+			ev.subscribe("session.deleted", (env) => {
+				if (env.session === titleRef.current) refreshInstances();
+			})
+		];
+		return () => offs.forEach((off) => off());
+	}, [rename]);
+	(0, import_react.useEffect)(() => {
+		if (inst) noteActivity(inst);
+	}, [inst]);
+	(0, import_react.useEffect)(() => {
+		const want = (name || title) + " — MindFlock";
+		const put = () => {
+			if (document.title !== want) document.title = want;
+		};
+		put();
+		const el = document.querySelector("title");
+		if (!el || typeof MutationObserver === "undefined") return;
+		const mo = new MutationObserver(put);
+		mo.observe(el, {
+			childList: true,
+			characterData: true,
+			subtree: true
+		});
+		return () => mo.disconnect();
+	}, [name, title]);
+	(0, import_react.useEffect)(() => {
+		useUi.getState().setFocused(title || null);
+	}, [title]);
+	(0, import_react.useEffect)(() => installKeymap(NO_HOST), []);
+	const hasInst = !!inst;
+	(0, import_react.useEffect)(() => {
+		if (!hasInst) return;
+		const t0 = Date.now();
+		let timer;
+		const tryFocus = () => {
+			if (peekTerm(titleRef.current, "agent")) {
+				const el = document.activeElement;
+				if (!el || el === document.body) focusTerm(titleRef.current);
+				return;
+			}
+			if (Date.now() - t0 < FOCUS_TRY_MS) timer = setTimeout(tryFocus, 100);
+		};
+		tryFocus();
+		return () => clearTimeout(timer);
+	}, [hasInst]);
+	(0, import_react.useEffect)(() => {
+		if (!gone) return;
+		const t = setTimeout(() => closeThisPopout(), GONE_CLOSE_MS);
+		return () => clearTimeout(t);
+	}, [gone]);
+	(0, import_react.useEffect)(() => useUi.subscribe((s, prev) => {
+		const d = s.openDialog;
+		if (!d || d === prev.openDialog || POPOUT_DIALOGS.has(d)) return;
+		useUi.getState().closeDialog();
+		toast("That’s in the main window");
+	}), []);
+	(0, import_react.useEffect)(() => {
+		const ours = (e) => !!e.dataTransfer?.types?.includes(SESSION_DRAG_MIME);
+		const over = (e) => {
+			if (!ours(e)) return;
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+		};
+		const drop = (e) => {
+			if (!ours(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		window.addEventListener("dragover", over, true);
+		window.addEventListener("drop", drop, true);
+		return () => {
+			window.removeEventListener("dragover", over, true);
+			window.removeEventListener("drop", drop, true);
+		};
+	}, []);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PopoutView, {
+		title,
+		name,
+		inst,
+		gone,
+		macLights: mac && !fullScreen,
+		shellButtons
+	});
+}
+function PopoutView({ title, name, inst, gone, macLights = false, shellButtons = false }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "popout-root",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PopoutBar, {
+				title,
+				name,
+				inst,
+				macLights,
+				shellButtons,
+				onBack: backToMainWindow
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "popout-body",
+				children: inst ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pane, {
+					inst,
+					embedded: true
+				}) : gone ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GoneNotice, {
+					name,
+					onClose: closeThisPopout
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "popout-loading",
+					children: "Loading…"
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MoveSessionDialog, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderPickerWindow, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouteStartMenu, {})
+		]
+	});
+}
+//#endregion
 //#region src/main.tsx
 Object.assign(window, {
 	Terminal: Dl,
@@ -164991,16 +165906,18 @@ publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
 installRepaintTriggers(window, document);
+var popout = isPopoutWindow();
+if (popout) installPopoutWindow();
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueryClientProvider, {
 	client: queryClient,
-	children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {})
+	children: popout ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PopoutApp, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {})
 }) }));
-requestAnimationFrame(() => {
+if (!popout) requestAnimationFrame(() => {
 	const s = document.createElement("script");
 	s.type = "module";
 	s.src = "/core/slots.js";
 	document.body.appendChild(s);
 });
-requestAnimationFrame(() => installPrefsSync());
-requestAnimationFrame(() => installJoinLink());
+if (!popout) requestAnimationFrame(() => installPrefsSync());
+if (!popout) requestAnimationFrame(() => installJoinLink());
 //#endregion

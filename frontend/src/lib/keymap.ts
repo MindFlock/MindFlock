@@ -31,6 +31,7 @@ import { openBehaviors } from "./behaviorsFocus";
 import { jumpToNeedsYou } from "./needsYou";
 import { newSession, toggleView } from "./viewMode";
 import { useHubUi } from "./hub";
+import { closeThisPopout, focusMainWindow, isPopoutWindow } from "./popout";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -62,6 +63,11 @@ export interface KeymapEntry extends Combo {
    * ignored), then run(e, "up") when that key or one of its modifiers is
    * released — or run(null, "up") when the window loses focus mid-hold. */
   holdable?: boolean;
+  /** In a pop-out window (lib/popout.ts) only the entries that say so fire:
+   * `true` runs `run` there too, a function runs INSTEAD of it (Ctrl+W: back
+   * to the main window). Everything else is the main window's — the rail,
+   * the views, the dialogs only it mounts — and its key falls through. */
+  popout?: true | ((e: KeyboardEvent | null) => void);
   run: (e: KeyboardEvent | null, phase?: HoldPhase) => void;
 }
 
@@ -528,6 +534,11 @@ function _handleChordKey(e: KeyboardEvent) {
     return;
   }
   const focused = useUi.getState().focused;
+  if (chord.global && isPopoutWindow()) {
+    // Ctrl+K N tours every session: the main window's rail and grid.
+    toast("Ctrl+K " + key.toUpperCase() + " works in the main window");
+    return;
+  }
   if (chord.global) {
     chord.run(focused);
     return;
@@ -553,6 +564,13 @@ export function workersKeyAllowed(): boolean {
 function closeFocused() {
   const f = useUi.getState().focused;
   if (f) sessionAction("close").run(f);
+}
+
+/** Ctrl+W in a pop-out window: its "Back to main window" — the session goes
+ * back to the grid, still running. Never Close: that ends the session. */
+export function backToMainWindow() {
+  focusMainWindow();
+  closeThisPopout();
 }
 
 export const KEYMAP: KeymapEntry[] = [
@@ -734,12 +752,13 @@ export const KEYMAP: KeymapEntry[] = [
     id: "reload",
     help: ["View", "Ctrl+R", "Reload the app (when a terminal isn’t focused)"],
     when: () => !terminalFocused(),
+    popout: true,
     run: () => location.reload(),
   },
   // -- Focused session -----------------------------------------------------
   // Commit lives on the Ctrl+K C chord (with the other git verbs) — see
   // CHORDS above.
-  { key: "k", mod: true, label: "the Ctrl+K chord prefix", run: () => _enterChord() }, // chord prefix
+  { key: "k", mod: true, label: "the Ctrl+K chord prefix", popout: true, run: () => _enterChord() }, // chord prefix
   {
     key: "w",
     mod: true,
@@ -754,6 +773,9 @@ export const KEYMAP: KeymapEntry[] = [
       "Close the focused session — moves it to Recently closed (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)",
     ],
     when: () => endShortcutAllowed() && !threadComposerFocused(),
+    // A pop-out's Ctrl+W is its window's close, the way a tab's is: the
+    // session goes back to the main window and keeps running.
+    popout: () => backToMainWindow(),
     run: () => closeFocused(),
   },
   {
@@ -779,6 +801,7 @@ export const KEYMAP: KeymapEntry[] = [
     id: "workers",
     help: ["Focused session", ASK_WORKERS_KEYS, "Ask for workers — types the workers request into the focused session (finish it, or press Enter)"],
     when: () => workersKeyAllowed(),
+    popout: true,
     run: () => {
       const f = useUi.getState().focused;
       if (f) runChordAction("askWorkers", f);
@@ -793,6 +816,7 @@ export const KEYMAP: KeymapEntry[] = [
     id: "flock",
     help: ["Focused session", FLOCK_KEYS, "Workers on every prompt — turn the focused session's Flock on or off"],
     when: () => workersKeyAllowed(),
+    popout: true,
     run: () => {
       const f = useUi.getState().focused;
       if (f) runChordAction("flock", f);
@@ -1010,7 +1034,9 @@ function _dispatch(e: KeyboardEvent) {
   }
   const norm = normKey(e.key || "");
   const mod = e.ctrlKey || e.metaKey;
+  const popout = isPopoutWindow();
   for (const b of KEYMAP) {
+    if (popout && !b.popout) continue; // the main window's shortcut
     for (const t of effBindings(b)) {
       if (normKey(t.key) !== norm) continue;
       if (t.mod === "ctrl" ? !e.ctrlKey : t.mod ? !mod : mod) continue;
@@ -1034,7 +1060,8 @@ function _dispatch(e: KeyboardEvent) {
         b.run(e, "down");
         return;
       }
-      b.run(e);
+      if (popout && typeof b.popout === "function") b.popout(e);
+      else b.run(e);
       return;
     }
   }

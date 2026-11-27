@@ -291,6 +291,11 @@ class ClaudeProvider(BaseProvider):
         m = str(model or "").strip().lower()
         return "/model " + m if m in self.MODEL_LADDER else None
 
+    def model_launch_args(self, model: str) -> tuple:
+        """``--model opus``: the alias starts that family's newest model."""
+        m = str(model or "").strip().lower()
+        return ("--model", m) if m in self.MODEL_LADDER else ()
+
     def model_default_file(self, inst=None) -> Optional[str]:
         """``<config dir>/settings.json``: Claude Code's ``/model opus`` also
         SAVES the model there as the default for every new session ("Set

@@ -21,6 +21,17 @@ export interface VisibleOpts {
   viewMode: ViewMode | string;
   mru: string[];
   order: string[];
+  /** Sessions in windows of their own (lib/popout): on screen ELSEWHERE, so
+   * they take no slot here. Unlike `hidden` this is no choice of the user's —
+   * the order and the MRU keep them, so one that comes back is judged
+   * exactly as it was before it left. */
+  poppedOut?: ReadonlySet<string>;
+}
+
+/** Not shown in THIS window: hidden, or popped out into one of its own. */
+function offGrid(opts: VisibleOpts): (t: string) => boolean {
+  const out = opts.poppedOut;
+  return (t) => opts.hidden.has(t) || (!!out && out.has(t));
 }
 
 /** Keep the `cap` most-recently-selected of `all`, in the ORDER GIVEN (the MRU
@@ -39,7 +50,8 @@ function capTitles(all: string[], cap: number, mru: string[]): string[] {
  * stable sidebar order. */
 export function computeVisible(instances: Instance[], opts: VisibleOpts): Instance[] {
   const { rows } = orderedInstances(instances, opts.order);
-  const shown = rows.filter((i) => !opts.hidden.has(i.title));
+  const off = offGrid(opts);
+  const shown = rows.filter((i) => !off(i.title));
   const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
   const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
   return shown.filter((i) => chosen.has(i.title));
@@ -66,7 +78,7 @@ export function computeVisibleSlots(
   const all = orderedKeys(
     instances.map((i) => i.title).concat(specialKeys),
     opts.order
-  ).filter((t) => !opts.hidden.has(t));
+  ).filter((t) => !offGrid(opts)(t));
   return capTitles(all, Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
 }
 
@@ -105,6 +117,33 @@ export function reconcileGridRows(prev: string[][], visibleTitles: string[]): st
   if (!rows.length) return balancedRows(visibleTitles);
   for (const t of incoming) rows = insertIntoGrid(rows, t);
   return rows;
+}
+
+/** The titles the saved rows are reconciled against: the visible slots, plus
+ * every popped-out session that already holds a place in them (and is still
+ * a live, unhidden session). That place is PARKED — kept in the saved layout
+ * but never drawn ({@link withoutParked}) — so when its window closes the
+ * session comes back to the very spot it left, not to the end of the grid. */
+export function withParked(
+  slotTitles: string[],
+  prevRows: string[][],
+  poppedOut: ReadonlySet<string>,
+  live: ReadonlySet<string>,
+  hidden: ReadonlySet<string>
+): string[] {
+  if (!poppedOut.size) return slotTitles;
+  const have = new Set(slotTitles);
+  const parked = prevRows
+    .flat()
+    .filter((t) => poppedOut.has(t) && live.has(t) && !hidden.has(t) && !have.has(t));
+  return parked.length ? slotTitles.concat(parked) : slotTitles;
+}
+
+/** The rows as drawn: parked (popped-out) titles left out, and a row they
+ * emptied dropped. The same array when nothing is parked. */
+export function withoutParked(rows: string[][], poppedOut: ReadonlySet<string>): string[][] {
+  if (!poppedOut.size || !rows.some((r) => r.some((t) => poppedOut.has(t)))) return rows;
+  return rows.map((r) => r.filter((t) => !poppedOut.has(t))).filter((r) => r.length);
 }
 
 export type DropSide = "left" | "right" | "top" | "bottom";
