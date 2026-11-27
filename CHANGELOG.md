@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session that only talks about a model limit is no longer switched.** An agent reply that quoted "You've hit your Fable limit", or a command that printed it, read as the real notice, so MindFlock switched an idle session to Opus and told it to carry on. Only Claude Code's own notice counts now: the "⎿  You've hit your …" line.
 - **The reset date in "resets Nov 30, 1am" is read.** Claude Code's current limit notice puts a comma before the time. The notice was still recognized, but its reset time came back unknown, so the "used up until…" toast left out the date.
 
 ## [0.14.36] - 2026-11-25

@@ -989,8 +989,10 @@ bounced, and emits `session.model_downshifted` (a toast: *Switched “api” fro
 Fable to Opus: Fable is used up until Nov 30 at 11pm*). A limit on the new
 model steps down again; the bottom of the ladder stays put.
 
-It acts only when the newest notice on the session's screen is a limit that
-NAMES a model of its provider's ladder (`BaseProvider.model_ladder`,
+It acts only when the newest notice on the session's screen is the CLI's own
+(on a Claude Code screen, a `⎿` block that starts with it: "⎿  You've hit
+your …"; an agent's reply, the person's prompt or a command's output that
+merely quotes one does not count), a limit that NAMES a model of its provider's ladder (`BaseProvider.model_ladder`,
 `model_limit`; Claude: Fable → Opus → Sonnet → Haiku) with nothing after it
 but the prompt — no reply, no "Set model to …" — the agent is idle, no dialog
 is up, nobody typed into it in the last 30 s, and it was not switched away

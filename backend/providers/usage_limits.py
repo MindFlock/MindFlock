@@ -289,6 +289,40 @@ MODEL_LIMIT_SUPERSEDED: tuple = (
 )
 
 
+#: Claude Code's block markers: a reply (``●``/``⏺``), a tool result or a
+#: notice (``⎿``), the person's prompt (``❯``), a status line (``✻``).
+_BLOCK_GLYPHS = "●⏺⎿❯✻"
+#: How a notice block starts: "⎿  You've hit your …", "⎿  Opus limit reached".
+_NOTICE_START = re.compile(
+    r"^(?:you(?:'|’)?ve\s+(?:hit|reached)|you\s+have\s+(?:hit|reached)"
+    r"|[A-Za-z][\w.\-]*(?:\s+[\d.]+)?\s+(?:usage\s+)?limit\s+reached)",
+    re.I,
+)
+
+
+def _is_notice(text: str, start: int) -> bool:
+    """Whether the match at ``start`` is the CLI's own notice, not words ABOUT
+    one: an agent's reply quoting "You've hit your Fable limit", the person's
+    prompt, a command echoed under a tool call. On a screen with block
+    markers, the block holding the match must be a ``⎿`` block that STARTS
+    with the notice. No marker above it (another CLI): taken as before."""
+    lines = text[:start].split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        row = lines[i].lstrip()
+        if not row or row[0] not in _BLOCK_GLYPHS:
+            continue
+        if row[0] != "⎿":
+            return False
+        head = row[1:].lstrip()
+        if i == len(lines) - 1:
+            # The match is on the marker's own line: what precedes it there.
+            head = head + text[start : start + 80]
+        else:
+            head = head + " " + "\n".join(lines[i + 1 :]) + text[start : start + 80]
+        return bool(_NOTICE_START.match(re.sub(r"\s+", " ", head)))
+    return True
+
+
 def detect_model_limit(
     text: str,
     ladder: Sequence[str],
@@ -313,6 +347,8 @@ def detect_model_limit(
             except IndexError:
                 continue
             if said not in names:
+                continue
+            if not _is_notice(text, m.start()):
                 continue
             if best is None or m.end() > best[0]:
                 best = (m.end(), said, m.start())

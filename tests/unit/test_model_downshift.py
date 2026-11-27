@@ -498,3 +498,40 @@ def test_local_models_keep_their_own_model(monkeypatch):
         launch_script, "local_overlay", lambda program: ({"X": "1"}, ())
     )
     assert launch_script.profile_overlay("claude")[1] == ()
+
+
+#: This very session, 2026-11-27: the agent's reply quoted the notice, then
+#: its next command echoed it under a tool call. Neither is the CLI's notice,
+#: and the sweep switched the session anyway.
+QUOTED_SCREEN = """\
+● Yes, switching to Opus when Fable runs out already works. It's been on by default since 0.14.32: a session that gets "You've hit your Fable limit" is
+  switched to Opus and told to carry on with the request that bounced.
+
+● Seeing how the false positive looked on screen
+  ⎿  $ tmux capture-pane -p | grep -n "hit your Fable limit"
+
+────────
+❯ 
+────────
+"""
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        QUOTED_SCREEN,
+        "❯ why did I hit your Fable limit so fast?\n\n────\n❯ \n",
+        "● Done.\n  ⎿  tests: your Fable limit resets Nov 30 at 1am in the fixture\n❯ \n",
+    ],
+    ids=["reply-and-echo", "persons-prompt", "tool-output"],
+)
+def test_words_about_a_limit_are_not_a_limit(screen):
+    assert ClaudeProvider().model_limit(screen, NOW) is None
+
+
+def test_a_quoting_session_is_not_switched(monkeypatch):
+    monkeypatch.setattr(md, "_capture", lambda name: QUOTED_SCREEN)
+    srv = _Srv(_Inst())
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    assert srv.sent == []
+    assert model_spent.spent(_claude().model_default_file(), NOW) == {}
