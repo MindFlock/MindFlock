@@ -60,6 +60,38 @@ contextBridge.exposeInMainWorld('winctl', {
   },
 })
 
+// Pop-out windows (frontend/src/lib/popout.ts `WinBridge`): a session in a
+// window of its own. main owns the truth — which title is in which window,
+// where each sits (restored at the next launch) — and pushes the full list of
+// popped-out titles to every window after each open, close or rename.
+contextBridge.exposeInMainWorld('mfwin', {
+  // { title, x?, y?, width?, height? }: x/y the screen point for its top-left
+  // (CSS px, event.screenX/Y). Focuses the pop-out when there is one already.
+  open: (o) => {
+    const r = o && typeof o === 'object' ? o : {}
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    return ipcRenderer.invoke('win:popout-open', {
+      title: String(r.title == null ? '' : r.title),
+      x: num(r.x),
+      y: num(r.y),
+      width: num(r.width),
+      height: num(r.height),
+    })
+  },
+  focus: (title) => ipcRenderer.invoke('win:popout-focus', String(title == null ? '' : title)),
+  // Docked back: closes it and forgets its saved place.
+  close: (title) => ipcRenderer.invoke('win:popout-close', String(title == null ? '' : title)),
+  rename: (from, to) => ipcRenderer.invoke('win:popout-rename',
+    String(from == null ? '' : from), String(to == null ? '' : to)),
+  list: () => ipcRenderer.invoke('win:popout-list'),
+  onChanged: (cb) => {
+    const h = (_e, titles) => cb(Array.isArray(titles) ? titles.map(String) : [])
+    ipcRenderer.on('win:popouts', h)
+    return () => ipcRenderer.removeListener('win:popouts', h)
+  },
+  focusMain: () => ipcRenderer.invoke('win:focus-main'),
+})
+
 // Offline-page diagnostics: lets offline.html explain WHY the UI can't load
 // (WSL down vs mindflock not installed vs server booting) and offer a
 // one-click WSL restart instead of telling the user to run shell commands.
@@ -124,7 +156,7 @@ contextBridge.exposeInMainWorld('mfengine', {
 })
 
 // OS notifications (frontend/src/lib/desktopNotify.ts): show() raises one
-// from the main process (only while the window isn't focused); onClick()
+// from the main process (only while no MindFlock window is focused); onClick()
 // hears which screen a clicked one is about ("devices" | "peer" | "update" |
 // "session:<title>", a session asking you something) — main has already
 // brought the window forward. Returns an unsubscribe.

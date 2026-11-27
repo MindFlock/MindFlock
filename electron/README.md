@@ -321,6 +321,7 @@ from the platform — `preload.js` exposes:
 | `winctl.onFullScreenChanged(cb)` | `fullscreen-changed` on enter/leave-full-screen; **returns an unsubscribe** | returns a no-op unsubscribe |
 | `winctl.isFullScreen()` | current state via `win:is-fullscreen` — the event above only carries transitions, so a window already fullscreen at load needs this | resolves false |
 | `mfdiag.*` | offline-page diagnostics | offline page isn't reachable |
+| `mfwin.*` | pop-out windows (`frontend/src/lib/popout.ts` `WinBridge`): `open`, `focus`, `close`, `rename`, `list`, `onChanged`, `focusMain` | the UI uses its browser path, which an older shell sends to the system browser, so pop-outs are off there |
 
 `nativeTitleBar` is deliberately a *capability* flag and not `platform ===
 'darwin'`: the shell and the engine-served frontend ship on independent
@@ -329,6 +330,31 @@ top-right, and a platform-keyed layout would stack the frontend's cluster on top
 of them. The flag is absent there, so that build keeps the layout it was built
 for. New bridge members must stay optional the same way — see
 [shell ↔ engine skew](../docs/development.md#shell--engine-skew).
+
+### Pop-out windows
+
+A session can live in an OS window of its own, torn off the main window and
+docked back (`frontend/src/lib/popout.ts`). Every window, the main one and each
+pop-out, is built from the same `windowChrome()` (frame rules, preload,
+`webPreferences`) and wired by `wireWindow()`: shortcuts, injected – □ ✕,
+navigation guard, offline retry, crash recovery and repaint act on *that*
+window, and the `win:*` IPC handlers find their window from `event.sender`. A
+pop-out's ✕ closes the pop-out, not the app. The main window alone owns
+updates (`UPDATE_JS`), sign-in hand-off, deep links, notifications' click and
+the first-run checklist.
+
+A pop-out loads `<origin>/?popout=<title>`, is titled `<title> — MindFlock`, and
+retries its own page with backoff behind a plain "waiting" page when the server
+is away. The registry and placement are pure (`popouts.js`, tested in
+`test/popouts.test.js`). Main pushes the popped-out titles to every window on
+`win:popouts` after each open, close or rename.
+
+The pop-outs open at quit come back at the next launch, after the main window's
+first app load. They are saved as `popouts: [{title, bounds, maximized}]` in
+`window-state.json` beside the main window's own entry, and restored at the
+same place or on the nearest display if theirs is gone. Closing a pop-out
+yourself (✕, the OS, or the page's dock-back) forgets it. Closing the main
+window closes every pop-out, and a quit keeps them saved.
 
 ## Dev loop (no rebuilds)
 
@@ -489,7 +515,7 @@ no console to watch when something breaks. Two logs capture everything:
 
 ## Files
 
-- `main.js` — the single `BrowserWindow` loading the UI + injected chrome
+- `main.js` — the main `BrowserWindow` (and the [pop-outs](#pop-out-windows)) loading the UI + injected chrome
   (scrollbar/title-strip CSS, `#mf-winctl` buttons), window-control IPC,
   auto-start of the hidden WSL server, offline/retry, log wiring. Window chrome
   is platform-branched (`frame: false` vs. darwin's `titleBarStyle: 'hidden'` +
@@ -504,6 +530,8 @@ no console to watch when something breaks. Two logs capture everything:
   (plus `onFullScreenChanged`, which unlike `onMaximizedChanged` returns an
   unsubscribe), and `window.mfdiag` to the offline page. See
   [the bridge contract](#window-chrome-and-the-preload-bridge).
+- `popouts.js` — pop-out windows, pure: placement on a display's work area,
+  the saved list, and the title → window registry.
 - `offline.html` — shown until the server answers. Polls `diag:get` (a hidden
   `wsl.exe` probe on Windows) to say *why* nothing is answering: server
   booting, MindFlock not installed, or WSL down — with a one-click
