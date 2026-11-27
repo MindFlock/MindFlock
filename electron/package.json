@@ -39,6 +39,7 @@
       "update.js",
       "engine.js",
       "launch.js",
+      "popouts.js",
       "offline.html",
       "icon.ico"
     ],

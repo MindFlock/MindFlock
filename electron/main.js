@@ -27,6 +27,8 @@ const fl = require('./firstlaunch')
 const upd = require('./update')
 // Which engine Windows drives (native or WSL) and how a native one runs.
 const eng = require('./engine')
+// Pop-out windows: placement, the saved list and the registry (pure).
+const pop = require('./popouts')
 // Launch flags, the per-profile dev identity and the server guard (pure).
 const lnch = require('./launch')
 
@@ -1262,7 +1264,7 @@ const TOKEN_READ_TIMEOUT_MS = 20000
 // mismatch (env-pinned token, a second server on the port) leaves the manual
 // sign-in form usable instead of reload-looping.
 const SIGN_IN_RETRY_MS = 60000
-let signInInFlight = false
+const signInInFlight = new Set()   // windows signing in now
 let signInLast = { token: '', at: 0 }
 
 // Bash that prints the local access token. `mindflock token` resolves it
@@ -1361,11 +1363,12 @@ function readEngineToken() {
 }
 
 // Called on every load of the app origin: if the server answered with its
-// sign-in page, sign the window in with the local token.
-async function autoSignIn() {
-  if (signInInFlight || !win || win.isDestroyed()) return
-  if (win.webContents.getTitle() !== SIGN_IN_TITLE) return
-  signInInFlight = true
+// sign-in page, sign the window in with the local token. `w` is the main
+// window unless a pop-out asks; `urlFor(extra)` is that window's own page.
+async function autoSignIn(w = win, urlFor = appUrl) {
+  if (!w || w.isDestroyed() || signInInFlight.has(w)) return
+  if (w.webContents.getTitle() !== SIGN_IN_TITLE) return
+  signInInFlight.add(w)
   try {
     const tok = await readEngineToken()
     if (!tok) {
@@ -1377,11 +1380,11 @@ async function autoSignIn() {
       return
     }
     signInLast = { token: tok, at: Date.now() }
-    if (!win || win.isDestroyed()) return
+    if (w.isDestroyed()) return
     console.log('[mindflock] sign-in page shown; signing in with the local access token')
-    win.loadURL(appUrl({ token: tok })).catch(() => {})
+    w.loadURL(urlFor({ token: tok })).catch(() => {})
   } finally {
-    signInInFlight = false
+    signInInFlight.delete(w)
   }
 }
 
@@ -1804,7 +1807,7 @@ async function checkForUpdates() {
   // page's update.available for the same release adds nothing more.
   // Only what the toast offers (ask mode, or an automatic install that can't
   // happen here): in auto mode the person hears about it once, afterwards.
-  const unfocused = win && !win.isDestroyed() && !win.isFocused()
+  const unfocused = win && !win.isDestroyed() && !BrowserWindow.getFocusedWindow()
   if (offerApp(updateAvailable) && claimUpdateNotice(latest) && unfocused) {
     showNotification('MindFlock ' + latest + ' is available', 'Click to open MindFlock and update', 'update')
   }
@@ -2331,12 +2334,20 @@ async function workingSessions() {
   return upd.workingCount(await fetchLocalJSON('/api/instances', 8000, token))
 }
 
+// No MindFlock window in sight: the main one and every pop-out minimized or
+// hidden. A person working in a pop-out while the main window is minimized
+// is still here, and an automatic restart would close that window on them.
+function appHidden() {
+  if (!win || win.isDestroyed()) return false
+  return BrowserWindow.getAllWindows().every((w) => w.isDestroyed() || w.isMinimized() || !w.isVisible())
+}
+
 async function autoUpdateTick() {
   if (autoTicking || SOURCE_RUN) return
   autoTicking = true
   try {
     const now = Date.now()
-    const hidden = !!(win && !win.isDestroyed() && (win.isMinimized() || !win.isVisible()))
+    const hidden = appHidden()
     autoHiddenSince = hidden ? (autoHiddenSince || now) : 0
     const st = Object.assign({
       source: SOURCE_RUN,
@@ -2923,25 +2934,36 @@ function showOffline(force) {
   win.loadFile(OFFLINE_FILE).catch(() => {})
 }
 
-function injectChrome() {
-  win.webContents.insertCSS(SCROLLBAR_CSS + TITLEBAR_CSS + UPDATE_CSS).catch(() => {})
-  win.webContents.executeJavaScript(TITLEBAR_JS + UPDATE_JS).catch(() => {})
+// The shell's own chrome, on every page a window loads: thin scrollbars and
+// the – □ ✕ buttons in every window; the update toast (UPDATE_JS) only in the
+// main one — it owns updates, and a pop-out taking the one-time "Updated to"
+// note would hide it from the main window.
+function injectChrome(w, isMain) {
+  if (!w || w.isDestroyed() || w.webContents.isDestroyed()) return
+  w.webContents.insertCSS(SCROLLBAR_CSS + TITLEBAR_CSS + (isMain ? UPDATE_CSS : '')).catch(() => {})
+  w.webContents.executeJavaScript(TITLEBAR_JS + (isMain ? UPDATE_JS : '')).catch(() => {})
 }
 
-// One repaint per burst: restore + show + focus arrive together, and 'moved'
-// fires continuously while a window is dragged. See createWindow's handlers.
-let repaintTimer = null
-function scheduleRepaint() {
-  if (repaintTimer) clearTimeout(repaintTimer)
-  repaintTimer = setTimeout(() => {
-    repaintTimer = null
-    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
-    if (win.isMinimized() || !win.isVisible()) return
-    try { win.webContents.invalidate() } catch (e) { /* best effort */ }
+// One repaint per burst and per window: restore + show + focus arrive
+// together, and 'moved' fires continuously while a window is dragged. See
+// wireWindow's handlers.
+const repaintTimers = new Map()   // BrowserWindow -> timer
+function repaintSoon(w) {
+  if (!w) return
+  if (repaintTimers.has(w)) clearTimeout(repaintTimers.get(w))
+  repaintTimers.set(w, setTimeout(() => {
+    repaintTimers.delete(w)
+    if (w.isDestroyed() || w.webContents.isDestroyed()) return
+    if (w.isMinimized() || !w.isVisible()) return
+    try { w.webContents.invalidate() } catch (e) { /* best effort */ }
     // Only the app page listens; offline.html ignores the event.
-    win.webContents.executeJavaScript(
+    w.webContents.executeJavaScript(
       "window.dispatchEvent(new Event('mindflock:repaint'))", true).catch(() => {})
-  }, 120)
+  }, 120))
+}
+// Every window (a GPU restart, a wake from sleep, a display change).
+function scheduleRepaint() {
+  for (const w of BrowserWindow.getAllWindows()) repaintSoon(w)
 }
 
 // The window's size and place across launches: saved on close to a small
@@ -2949,6 +2971,8 @@ function scheduleRepaint() {
 // its own), restored only when the saved rectangle still lands on a display
 // that is connected now — a window saved on an unplugged monitor would open
 // off-screen. Anything unreadable falls back to the 1280×820 default.
+// The same file holds the pop-outs open at the last quit (`popouts`, see
+// electron/popouts.js), reopened once the main window has loaded the app.
 const WINDOW_DEFAULT = { width: 1280, height: 820 }
 const WINDOW_MIN = { width: 900, height: 600 }
 const windowStatePath = () => path.join(app.getPath('userData'), 'window-state.json')
@@ -2975,26 +2999,25 @@ function readWindowState() {
   try { return JSON.parse(fs.readFileSync(windowStatePath(), 'utf8')) } catch (e) { return null }
 }
 
-function saveWindowState() {
-  if (!win || win.isDestroyed()) return
-  try {
-    fs.writeFileSync(windowStatePath(), JSON.stringify({
-      // Normal bounds: a maximized window's restore size, not the screen's.
-      bounds: win.getNormalBounds(),
-      maximized: win.isMaximized(),
-    }))
-  } catch (e) { /* best effort — the next launch opens at the default */ }
+// The file with `patch` merged in: the main window and the pop-outs each
+// write their own keys and keep the other's.
+function writeWindowState(patch) {
+  const cur = readWindowState()
+  const next = Object.assign({}, cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {}, patch)
+  try { fs.writeFileSync(windowStatePath(), JSON.stringify(next)) } catch (e) { /* best effort */ }
 }
 
-function createWindow() {
-  const saved = readWindowState()
-  let place = {}
-  try { place = restorableBounds(saved, require('electron').screen.getAllDisplays()) } catch (e) { /* defaults */ }
-  win = new BrowserWindow({
-    ...WINDOW_DEFAULT,
-    ...place,
-    minWidth: WINDOW_MIN.width,
-    minHeight: WINDOW_MIN.height,
+function saveWindowState() {
+  if (!win || win.isDestroyed()) return
+  // Normal bounds: a maximized window's restore size, not the screen's.
+  // Best effort — the next launch opens at the default.
+  writeWindowState({ bounds: win.getNormalBounds(), maximized: win.isMaximized() })
+}
+
+// What every window shares: the frameless chrome, the icon, the preload and
+// its security posture. The main window and each pop-out add size and title.
+function windowChrome() {
+  return {
     // Custom title strip on every platform; native drag/resize still work.
     // macOS is the exception: `frame:false` there ALSO removes the traffic
     // lights, so the shell drew its own – □ ✕ on the right — the Windows
@@ -3006,7 +3029,6 @@ function createWindow() {
       ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 13, y: 13 } }
       : { frame: false }),
     backgroundColor: '#0f1117',
-    title: DEV ? 'MindFlock (dev)' : 'MindFlock',
     icon: DEV_ICON || path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -3029,11 +3051,219 @@ function createWindow() {
       // dev runs keep them.
       devTools: !app.isPackaged,
     },
+  }
+}
+
+// The wiring every window gets — the main one and each pop-out — as closures
+// over THAT window (never the global `win`). `ctx` is what differs:
+//   isMain          the main window (update toast, did-fail-load diagnostics)
+//   load()          (re)load the window's own page
+//   showOffline(f)  its offline page (`f`: even when already showing it)
+//   scheduleRetry() retry load() with its own backoff
+//   failed()        extra work on a failed load (main: re-ensure the server)
+function wireWindow(w, ctx) {
+  logger.attachWindow(w)
+
+  w.webContents.on('dom-ready', () => injectChrome(w, ctx.isMain))
+  w.webContents.on('before-input-event', (_e, input) => {
+    if (input.type !== 'keyDown') return
+
+    // Fullscreen toggle — F11 everywhere (the Windows/Linux standard) and
+    // ⌃⌘F on macOS (the platform standard). Checked before the mod-key gate
+    // below because F11 carries no modifier. setFullScreen works with our
+    // frameless window; the custom title strip stays draggable in fullscreen.
+    const fsMac = process.platform === 'darwin' && input.control && input.meta &&
+      (input.key === 'f' || input.key === 'F')
+    if (input.key === 'F11' || fsMac) {
+      _e.preventDefault()
+      w.setFullScreen(!w.isFullScreen())
+      return
+    }
+
+    const mod = input.control || input.meta        // Ctrl (Win/Linux) or ⌘ (Mac)
+    if (!mod) return
+    // Nothing here takes Ctrl/⌘+W: in a pop-out the page handles it (it docks
+    // the session back), and the macOS Window menu (role windowMenu) has no
+    // Close item to grab it first.
+
+    // Ctrl+Shift+L opens the logs folder (support hook).
+    if (input.shift && (input.key === 'L' || input.key === 'l')) {
+      openLogFolder()
+      return
+    }
+
+    // Dev loop: Ctrl+Shift+R reloads the UI via loadApp (which also escapes
+    // the offline page) — frontend/Python edits need no app rebuild, the
+    // shell only freezes main/preload/offline. Explicit here so it doesn't
+    // depend on Electron's default-menu accelerators surviving a frameless
+    // window. Plain Ctrl+R belongs to the web layer's keymap, which reloads
+    // only while no terminal pane is focused — inside a terminal it stays
+    // bash reverse-i-search. No devtools shortcut on purpose: users
+    // shouldn't be poking at the shell's internals. A pop-out reloads its own
+    // page (ctx.load).
+    if (input.shift && (input.key === 'R' || input.key === 'r')) {
+      _e.preventDefault()
+      ctx.load()
+      return
+    }
+    // Ctrl+Shift+I: devtools in UNPACKAGED (npm start) dev runs only. In the
+    // installed app devtools are hard-disabled via webPreferences anyway;
+    // this guard just keeps the shortcut itself from existing for users.
+    if (!app.isPackaged && input.shift && (input.key === 'I' || input.key === 'i')) {
+      _e.preventDefault()
+      w.webContents.toggleDevTools()
+      return
+    }
+
+    // Native page zoom (centered — same as the built-in zoom, unlike CSS zoom).
+    // Electron's default menu handles Ctrl+- / Ctrl+0 but its Ctrl+Plus zoom-in
+    // accelerator is unreliable, so drive all of it here. Match input.code (the
+    // physical key) so Ctrl++ (== Ctrl+Shift+=) zooms in just like Ctrl+=.
+    // preventDefault stops the key reaching the page/terminal.
+    const wc = w.webContents
+    if (input.code === 'Equal' || input.code === 'NumpadAdd') {
+      _e.preventDefault()
+      wc.setZoomLevel(Math.min(wc.getZoomLevel() + 0.5, 5))
+    } else if (input.code === 'Minus' || input.code === 'NumpadSubtract') {
+      _e.preventDefault()
+      wc.setZoomLevel(Math.max(wc.getZoomLevel() - 0.5, -3))
+    } else if (input.code === 'Digit0' || input.code === 'Numpad0') {
+      _e.preventDefault()
+      wc.setZoomLevel(0)                            // reset to 100%
+    }
+  })
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  // Navigation guard, mirroring the window-open handler above: the window may
+  // only navigate within the local server's origin. Anything else (external
+  // links, redirects, dragged files) is cancelled and http(s) URLs open in
+  // the system browser instead. Main-process loadURL/loadFile calls (the app
+  // itself, the offline page) don't emit will-navigate, so they're unaffected.
+  w.webContents.on('will-navigate', (event, url) => {
+    let dest = null
+    try { dest = new URL(url) } catch (e) {}
+    if (dest && APP_ORIGIN && dest.origin === APP_ORIGIN) return
+    event.preventDefault()
+    if (dest && (dest.protocol === 'http:' || dest.protocol === 'https:')) {
+      shell.openExternal(url)
+    }
+  })
+  // Server not up yet -> offline page, retry until it answers.
+  w.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3 /* ABORTED */) return
+    console.log('[mindflock] load failed', code, desc, '-> offline, retrying' +
+      (ctx.isMain ? '' : ' (pop-out)'))
+    ctx.showOffline()
+    if (ctx.failed) ctx.failed()
+    ctx.scheduleRetry()
   })
 
-  logger.attachWindow(win)
+  // Renderer crash / hang recovery. logger.attachWindow already writes the
+  // FATAL/WARN line for these events; here we get the user back to a working
+  // window: auto-reload, but at most 3 times per 5 minutes — a renderer that
+  // keeps dying is a real bug, and a reload storm would just spin the CPU.
+  // Past the cap we fall back to the offline page + retry loop that
+  // did-fail-load already uses, so the window never sits on a dead renderer.
+  // Counted per window: a pop-out that keeps crashing doesn't use up main's.
+  const CRASH_WINDOW_MS = 5 * 60 * 1000
+  const CRASH_MAX_RELOADS = 3
+  let crashReloadTimes = []
+  const recoverRenderer = (why) => {
+    if (w.isDestroyed()) return
+    const now = Date.now()
+    crashReloadTimes = crashReloadTimes.filter((t) => now - t < CRASH_WINDOW_MS)
+    if (crashReloadTimes.length >= CRASH_MAX_RELOADS) {
+      console.error('[mindflock]', why, '— reload cap reached (' + CRASH_MAX_RELOADS +
+        ' per 5 min); showing offline page')
+      ctx.showOffline(true)
+      ctx.scheduleRetry()
+      return
+    }
+    crashReloadTimes.push(now)
+    console.error('[mindflock]', why, '— auto-reloading (' +
+      crashReloadTimes.length + '/' + CRASH_MAX_RELOADS + ')')
+    ctx.load()
+  }
+  w.webContents.on('render-process-gone', (_e, details) => {
+    const reason = details && details.reason
+    if (reason === 'clean-exit') return   // normal teardown, not a crash
+    recoverRenderer('renderer gone (' + (reason || 'unknown') + ')')
+  })
+  w.webContents.on('unresponsive', () => recoverRenderer('window unresponsive'))
+  w.webContents.on('responsive', () =>
+    console.log('[mindflock] window responsive again'))
 
-  win.webContents.on('dom-ready', injectChrome)
+  const sendMax = () => {
+    if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+      w.webContents.send('maximized-changed', w.isMaximized())
+    }
+  }
+  w.on('maximize', sendMax)
+  w.on('unmaximize', sendMax)
+
+  // macOS hides the traffic lights in fullscreen, so the top bar has to give
+  // back the room it reserves for them (see TopBar's `data-mac-lights`) or the
+  // menu sits behind a 78px hole.
+  const sendFullScreen = () => {
+    if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+      w.webContents.send('fullscreen-changed', w.isFullScreen())
+    }
+  }
+  w.on('enter-full-screen', sendFullScreen)
+  w.on('leave-full-screen', sendFullScreen)
+
+  // Repaint on the way back: the fix for panes that went blank WHITE until a
+  // small scroll (docs/development.md "Blank white panes"). Coming back from
+  // minimized, from behind another window (Windows' native occlusion tracking
+  // hides the page while covered), onto another display, or out of a GPU
+  // process restart, Chromium can show a surface whose raster was dropped and
+  // nothing re-rasters a pane that has no new output. Two halves: invalidate()
+  // repaints the native window, and the page event makes the web UI redraw
+  // every terminal on screen (frontend lib/wsTerm installRepaintTriggers).
+  for (const ev of ['restore', 'show', 'focus', 'maximize', 'unmaximize', 'moved',
+    'enter-full-screen', 'leave-full-screen']) {
+    w.on(ev, () => repaintSoon(w))
+  }
+  w.on('closed', () => {
+    if (repaintTimers.has(w)) clearTimeout(repaintTimers.get(w))
+    repaintTimers.delete(w)
+  })
+  // Windows shutdown / log-off closes the windows WITHOUT a before-quit:
+  // the pop-outs closing then are not the person docking them back.
+  w.on('session-end', () => popouts.keepAll())
+}
+
+function createWindow() {
+  const saved = readWindowState()
+  let place = {}
+  try { place = restorableBounds(saved, require('electron').screen.getAllDisplays()) } catch (e) { /* defaults */ }
+  // The pop-outs open at the last quit: reopened after the first app load.
+  popouts.load(saved && saved.popouts)
+  win = new BrowserWindow({
+    ...WINDOW_DEFAULT,
+    ...place,
+    minWidth: WINDOW_MIN.width,
+    minHeight: WINDOW_MIN.height,
+    ...windowChrome(),
+    title: DEV ? 'MindFlock (dev)' : 'MindFlock',
+  })
+
+  wireWindow(win, {
+    isMain: true,
+    load: loadApp,
+    showOffline,
+    scheduleRetry,
+    // Re-ensure the server on every failed load so a crash/never-started server
+    // (e.g. after a WSL restart) gets relaunched instead of leaving the app
+    // stuck on offline forever. Idempotent: it probes 8765 first and the spawn
+    // cooldown suppresses duplicates while one is booting.
+    // Warm the WSL/install diagnosis so the offline page's first poll has an
+    // answer (it also re-polls; refreshDiag throttles itself via DIAG_STALE_MS).
+    failed: () => { startServerIfNeeded(); refreshDiag() },
+  })
+
   win.webContents.on('did-finish-load', () => {
     // Real app loaded (not the bundled offline page) -> the server answered;
     // reset the cold-start backoff so the next outage probes fast again.
@@ -3056,179 +3286,24 @@ function createWindow() {
         markFirstLaunchDone()
         // ...and the join link (an offline or sign-in page kept it owed).
         pendingJoinCode = ''
+        // The app is up and signed in: the pop-outs of the last run come back.
+        restorePopouts()
       }
     }
     // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
     console.log('[mindflock] loaded:', win.webContents.getURL().split('?')[0])
   })
-  win.webContents.on('before-input-event', (_e, input) => {
-    if (input.type !== 'keyDown') return
-
-    // Fullscreen toggle — F11 everywhere (the Windows/Linux standard) and
-    // ⌃⌘F on macOS (the platform standard). Checked before the mod-key gate
-    // below because F11 carries no modifier. setFullScreen works with our
-    // frameless window; the custom title strip stays draggable in fullscreen.
-    const fsMac = process.platform === 'darwin' && input.control && input.meta &&
-      (input.key === 'f' || input.key === 'F')
-    if (input.key === 'F11' || fsMac) {
-      _e.preventDefault()
-      win.setFullScreen(!win.isFullScreen())
-      return
-    }
-
-    const mod = input.control || input.meta        // Ctrl (Win/Linux) or ⌘ (Mac)
-    if (!mod) return
-
-    // Ctrl+Shift+L opens the logs folder (support hook).
-    if (input.shift && (input.key === 'L' || input.key === 'l')) {
-      openLogFolder()
-      return
-    }
-
-    // Dev loop: Ctrl+Shift+R reloads the UI via loadApp (which also escapes
-    // the offline page) — frontend/Python edits need no app rebuild, the
-    // shell only freezes main/preload/offline. Explicit here so it doesn't
-    // depend on Electron's default-menu accelerators surviving a frameless
-    // window. Plain Ctrl+R belongs to the web layer's keymap, which reloads
-    // only while no terminal pane is focused — inside a terminal it stays
-    // bash reverse-i-search. No devtools shortcut on purpose: users
-    // shouldn't be poking at the shell's internals.
-    if (input.shift && (input.key === 'R' || input.key === 'r')) {
-      _e.preventDefault()
-      loadApp()
-      return
-    }
-    // Ctrl+Shift+I: devtools in UNPACKAGED (npm start) dev runs only. In the
-    // installed app devtools are hard-disabled via webPreferences anyway;
-    // this guard just keeps the shortcut itself from existing for users.
-    if (!app.isPackaged && input.shift && (input.key === 'I' || input.key === 'i')) {
-      _e.preventDefault()
-      win.webContents.toggleDevTools()
-      return
-    }
-
-    // Native page zoom (centered — same as the built-in zoom, unlike CSS zoom).
-    // Electron's default menu handles Ctrl+- / Ctrl+0 but its Ctrl+Plus zoom-in
-    // accelerator is unreliable, so drive all of it here. Match input.code (the
-    // physical key) so Ctrl++ (== Ctrl+Shift+=) zooms in just like Ctrl+=.
-    // preventDefault stops the key reaching the page/terminal.
-    const wc = win.webContents
-    if (input.code === 'Equal' || input.code === 'NumpadAdd') {
-      _e.preventDefault()
-      wc.setZoomLevel(Math.min(wc.getZoomLevel() + 0.5, 5))
-    } else if (input.code === 'Minus' || input.code === 'NumpadSubtract') {
-      _e.preventDefault()
-      wc.setZoomLevel(Math.max(wc.getZoomLevel() - 0.5, -3))
-    } else if (input.code === 'Digit0' || input.code === 'Numpad0') {
-      _e.preventDefault()
-      wc.setZoomLevel(0)                            // reset to 100%
-    }
-  })
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  // Navigation guard, mirroring the window-open handler above: the window may
-  // only navigate within the local server's origin. Anything else (external
-  // links, redirects, dragged files) is cancelled and http(s) URLs open in
-  // the system browser instead. Main-process loadURL/loadFile calls (the app
-  // itself, the offline page) don't emit will-navigate, so they're unaffected.
-  win.webContents.on('will-navigate', (event, url) => {
-    let dest = null
-    try { dest = new URL(url) } catch (e) {}
-    if (dest && APP_ORIGIN && dest.origin === APP_ORIGIN) return
-    event.preventDefault()
-    if (dest && (dest.protocol === 'http:' || dest.protocol === 'https:')) {
-      shell.openExternal(url)
-    }
-  })
-  // Server not up yet -> offline page, retry until it answers.
-  win.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
-    if (!isMainFrame || code === -3 /* ABORTED */) return
-    console.log('[mindflock] load failed', code, desc, '-> offline, retrying')
-    showOffline()
-    // Re-ensure the server on every failed load so a crash/never-started server
-    // (e.g. after a WSL restart) gets relaunched instead of leaving the app
-    // stuck on offline forever. Idempotent: it probes 8765 first and the spawn
-    // cooldown suppresses duplicates while one is booting.
-    startServerIfNeeded()
-    // Warm the WSL/install diagnosis so the offline page's first poll has an
-    // answer (it also re-polls; refreshDiag throttles itself via DIAG_STALE_MS).
-    refreshDiag()
-    scheduleRetry()
-  })
-
-  // Renderer crash / hang recovery. logger.attachWindow already writes the
-  // FATAL/WARN line for these events; here we get the user back to a working
-  // window: auto-reload, but at most 3 times per 5 minutes — a renderer that
-  // keeps dying is a real bug, and a reload storm would just spin the CPU.
-  // Past the cap we fall back to the offline page + retry loop that
-  // did-fail-load already uses, so the window never sits on a dead renderer.
-  const CRASH_WINDOW_MS = 5 * 60 * 1000
-  const CRASH_MAX_RELOADS = 3
-  let crashReloadTimes = []
-  const recoverRenderer = (why) => {
-    if (!win || win.isDestroyed()) return
-    const now = Date.now()
-    crashReloadTimes = crashReloadTimes.filter((t) => now - t < CRASH_WINDOW_MS)
-    if (crashReloadTimes.length >= CRASH_MAX_RELOADS) {
-      console.error('[mindflock]', why, '— reload cap reached (' + CRASH_MAX_RELOADS +
-        ' per 5 min); showing offline page')
-      showOffline(true)
-      scheduleRetry()
-      return
-    }
-    crashReloadTimes.push(now)
-    console.error('[mindflock]', why, '— auto-reloading (' +
-      crashReloadTimes.length + '/' + CRASH_MAX_RELOADS + ')')
-    loadApp()
-  }
-  win.webContents.on('render-process-gone', (_e, details) => {
-    const reason = details && details.reason
-    if (reason === 'clean-exit') return   // normal teardown, not a crash
-    recoverRenderer('renderer gone (' + (reason || 'unknown') + ')')
-  })
-  win.webContents.on('unresponsive', () => recoverRenderer('window unresponsive'))
-  win.webContents.on('responsive', () =>
-    console.log('[mindflock] window responsive again'))
-
-  const sendMax = () => {
-    if (win && !win.webContents.isDestroyed()) {
-      win.webContents.send('maximized-changed', win.isMaximized())
-    }
-  }
-  win.on('maximize', sendMax)
-  win.on('unmaximize', sendMax)
-
-  // macOS hides the traffic lights in fullscreen, so the top bar has to give
-  // back the room it reserves for them (see TopBar's `data-mac-lights`) or the
-  // menu sits behind a 78px hole.
-  const sendFullScreen = () => {
-    if (win && !win.webContents.isDestroyed()) {
-      win.webContents.send('fullscreen-changed', win.isFullScreen())
-    }
-  }
-  win.on('enter-full-screen', sendFullScreen)
-  win.on('leave-full-screen', sendFullScreen)
 
   // Restored maximized when it was closed maximized (the restore size is
   // still the saved one, so un-maximizing lands where it was).
   if (saved && saved.maximized) win.maximize()
   win.on('close', saveWindowState)
-  win.on('closed', () => { win = null })
-
-  // Repaint on the way back: the fix for panes that went blank WHITE until a
-  // small scroll (docs/development.md "Blank white panes"). Coming back from
-  // minimized, from behind another window (Windows' native occlusion tracking
-  // hides the page while covered), onto another display, or out of a GPU
-  // process restart, Chromium can show a surface whose raster was dropped and
-  // nothing re-rasters a pane that has no new output. Two halves: invalidate()
-  // repaints the native window, and the page event makes the web UI redraw
-  // every terminal on screen (frontend lib/wsTerm installRepaintTriggers).
-  for (const ev of ['restore', 'show', 'focus', 'maximize', 'unmaximize', 'moved',
-    'enter-full-screen', 'leave-full-screen']) {
-    win.on(ev, scheduleRepaint)
-  }
+  win.on('closed', () => {
+    win = null
+    // Every pop-out goes with the main window (it owns updates, notifications
+    // and the server), and each one stays in the saved list for next launch.
+    popouts.closeAll()
+  })
 
   // The page sets document.title (with unread-badge counts), which otherwise
   // overrides the "(dev)" window title — keep the marker in alt-tab / taskbar.
@@ -3243,19 +3318,191 @@ function createWindow() {
   loadApp()
 }
 
-ipcMain.on('win:minimize', () => { if (win) win.minimize() })
-ipcMain.on('win:toggle-maximize', () => {
-  if (!win) return
-  win.isMaximized() ? win.unmaximize() : win.maximize()
+// ---------------------------------------------------------------------------
+// Pop-out windows: a session in a window of its own (frontend lib/popout.ts;
+// preload.js `mfwin`). The registry (electron/popouts.js) knows which title
+// is in which window and keeps window-state.json's `popouts` in step; here is
+// the Electron half: building one, its page and offline retry, placement on
+// the real screens, and telling every window when the set changes.
+// ---------------------------------------------------------------------------
+const popouts = pop.createRegistry({
+  create: createPopoutWindow,
+  boundsOf: (w) => (w.isDestroyed() ? null : { bounds: w.getNormalBounds(), maximized: w.isMaximized() }),
+  write: (list) => writeWindowState({ popouts: list }),
+  changed: broadcastPopouts,
+  retitle: (w, t) => { if (!w.isDestroyed()) w.setTitle(pop.windowTitle(t, DEV)) },
 })
-ipcMain.on('win:close', () => { if (win) win.close() })
+let popoutsRestored = false
+
+// The full list of popped-out titles, to EVERY app window (the main one
+// moves those sessions out of its grid; a pop-out may show it too).
+function broadcastPopouts(titles) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed() || w.webContents.isDestroyed()) continue
+    w.webContents.send('win:popouts', titles)
+  }
+}
+
+// A pop-out's page: the app itself, showing the one session.
+function popoutPageUrl(title, extra) {
+  return pop.popoutUrl(APP_ORIGIN || APP_URL, title, extra)
+}
+
+function electronScreen() {
+  try { return require('electron').screen } catch (e) { return null }
+}
+
+// The work area of the display nearest `pt` (any display, as a last resort
+// a 1280×800 box at the origin so placement still has something to clamp to).
+function workAreaAt(pt) {
+  const scr = electronScreen()
+  try {
+    return scr.getDisplayNearestPoint({ x: Math.round(pt.x), y: Math.round(pt.y) }).workArea
+  } catch (e) {
+    return { x: 0, y: 0, width: 1280, height: 800 }
+  }
+}
+
+// Build and wire the window for `title` (the registry calls this; it tracks
+// the window and its 'closed'). `at`: { bounds, maximized, restored }.
+function createPopoutWindow(title, at) {
+  const b = at.bounds || pop.clampToWorkArea({}, workAreaAt({ x: 0, y: 0 }))
+  const pw = new BrowserWindow({
+    x: b.x,
+    y: b.y,
+    width: b.width,
+    height: b.height,
+    minWidth: pop.MIN_SIZE.width,
+    minHeight: pop.MIN_SIZE.height,
+    ...windowChrome(),
+    title: pop.windowTitle(title, DEV),
+    // A restored one comes up behind the main window instead of taking focus
+    // from it; a new one (the person just tore it off) comes up focused.
+    show: !at.restored,
+  })
+  // The title follows a rename (the registry re-keys this window).
+  const current = () => popouts.titleOf(pw) || title
+
+  // Its own retry loop, like the main window's: fast at first, easing out.
+  let retryTimer = null
+  let retryDelay = RETRY_MIN_MS
+  const load = () => {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+    if (pw.isDestroyed()) return
+    pw.loadURL(popoutPageUrl(current())).catch(() => {})
+  }
+  const scheduleRetry = () => {
+    if (retryTimer) clearTimeout(retryTimer)
+    retryTimer = setTimeout(load, retryDelay)
+    retryDelay = Math.min(RETRY_MS, retryDelay * 2)
+  }
+  // A plain "waiting" page (the diagnostics live in the main window), loaded
+  // only when not already on it — a failed load never commits, see showOffline.
+  const showOffline = (force) => {
+    if (pw.isDestroyed()) return
+    const cur = pw.webContents.getURL() || ''
+    if (!force && cur.startsWith('data:')) return
+    pw.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pop.offlinePage(current()))).catch(() => {})
+  }
+
+  wireWindow(pw, { isMain: false, load, showOffline, scheduleRetry })
+
+  pw.webContents.on('did-finish-load', () => {
+    if (pw.isDestroyed()) return
+    if (pw.webContents.getURL().startsWith(APP_ORIGIN || APP_URL)) {
+      retryDelay = RETRY_MIN_MS
+      // The server's sign-in page (the token gate, its cookie gone): sign this
+      // window in the way the main one is.
+      autoSignIn(pw, (extra) => popoutPageUrl(current(), extra)).catch(() => {})
+    }
+  })
+  // The window title is the session's: the page's document.title would
+  // otherwise replace it.
+  pw.on('page-title-updated', (e) => {
+    e.preventDefault()
+    if (!pw.isDestroyed()) pw.setTitle(pop.windowTitle(current(), DEV))
+  })
+  // Where it sits is saved (debounced) as it moves.
+  for (const ev of ['moved', 'resized', 'maximize', 'unmaximize']) pw.on(ev, () => popouts.moved())
+  pw.on('closed', () => { if (retryTimer) clearTimeout(retryTimer); retryTimer = null })
+
+  if (at.restored) pw.showInactive()
+  if (at.maximized) pw.maximize()
+  load()
+  return pw
+}
+
+// The pop-outs open at the last quit, back where they were (or on the
+// nearest display, when theirs is gone). Once per run, after the main
+// window's first app load.
+function restorePopouts() {
+  if (popoutsRestored) return
+  popoutsRestored = true
+  const scr = electronScreen()
+  let displays = []
+  try { displays = scr.getAllDisplays() } catch (e) { /* placement clamps */ }
+  const n = popouts.restore((entry) => pop.restorePlacement(entry, displays, workAreaAt))
+  if (n) console.log('[mindflock] reopened', n, 'pop-out window' + (n === 1 ? '' : 's'))
+}
+
+// The page's open({title, x?, y?, width?, height?}): x/y are where its
+// top-left goes on the screen (a drag's event.screenX/Y); without them it
+// opens under the cursor. Either way all of it lands on one display.
+function openPopout(o) {
+  const opts = o && typeof o === 'object' ? o : {}
+  const title = opts.title
+  if (!pop.isTitle(title)) return false
+  if (popouts.has(title)) return popouts.focus(title)
+  let cursor = { x: 0, y: 0 }
+  try { cursor = electronScreen().getCursorScreenPoint() } catch (e) { /* the origin */ }
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const bounds = pop.placeNew({ x: num(opts.x), y: num(opts.y), width: num(opts.width), height: num(opts.height) },
+    cursor, workAreaAt)
+  return popouts.open(title, bounds)
+}
+
+ipcMain.handle('win:popout-open', (_e, o) => openPopout(o))
+ipcMain.handle('win:popout-focus', (_e, title) => popouts.focus(title))
+// The page chose to dock it back: the window closes and its place is
+// forgotten. Closed on the next turn so this call's reply still reaches a
+// pop-out asking to close itself.
+ipcMain.handle('win:popout-close', (_e, title) => {
+  if (!pop.isTitle(title) || !popouts.has(title)) return popouts.close(title)
+  setImmediate(() => popouts.close(title))
+  return true
+})
+ipcMain.handle('win:popout-rename', (_e, from, to) => popouts.rename(from, to))
+ipcMain.handle('win:popout-list', () => popouts.list())
+ipcMain.handle('win:focus-main', () => {
+  if (!win || win.isDestroyed()) return false
+  focusWindow()
+  return true
+})
+
+// The window an IPC message came from: the – □ ✕ buttons act on THEIR
+// window (a pop-out's ✕ closes the pop-out, not the main window).
+function senderWindow(e) {
+  const w = e && e.sender ? BrowserWindow.fromWebContents(e.sender) : null
+  return w && !w.isDestroyed() ? w : null
+}
+
+ipcMain.on('win:minimize', (e) => { const w = senderWindow(e); if (w) w.minimize() })
+ipcMain.on('win:toggle-maximize', (e) => {
+  const w = senderWindow(e)
+  if (!w) return
+  w.isMaximized() ? w.unmaximize() : w.maximize()
+})
+ipcMain.on('win:close', (e) => { const w = senderWindow(e); if (w) w.close() })
 // Current fullscreen state, pulled once when the top bar mounts. The
 // 'fullscreen-changed' push above only carries TRANSITIONS, and a window that is
 // already fullscreen when the page loads (or reloads — the offline-recovery path
 // reloads on its own) never sees one, so it would hold the traffic-light gap
 // open until the user toggled fullscreen. A pull can't race the renderer's
 // listener registration the way a push at did-finish-load would.
-ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
+ipcMain.handle('win:is-fullscreen', (e) => {
+  const w = senderWindow(e)
+  return !!(w && w.isFullScreen())
+})
 
 // OS notifications (renderer: frontend/src/lib/desktopNotify.ts). The page
 // asks only while its window isn't focused, for the few things that need the
@@ -3322,7 +3569,9 @@ ipcMain.handle('notify:show', async (_e, o) => {
   const opts = o && typeof o === 'object' ? o : {}
   const target = notifyTarget(opts.target)
   // The page only asks while unfocused; re-check here (it can race a focus).
-  if (win && !win.isDestroyed() && win.isFocused()) return { ok: false }
+  // Any app window counts: the person is looking at MindFlock in a pop-out
+  // too.
+  if (BrowserWindow.getFocusedWindow()) return { ok: false }
   if (target.startsWith('session:')) drawAttention()
   // An update (the engine's update.available, from the page): one notice per
   // release — none when this shell already announced that version (its own
@@ -3478,6 +3727,9 @@ app.whenReady().then(() => {
     screen.on('display-removed', scheduleRepaint)
   } catch (e) { /* no screen module: nothing to watch */ }
 })
+// Quitting (Cmd+Q, an update's restart): the pop-outs close with the app
+// and stay in the saved list, so they reopen at the next launch.
+app.on('before-quit', () => popouts.keepAll())
 app.on('window-all-closed', () => app.quit())
 // Native Windows: the server this app started goes with it (its whole tree,
 // forcibly — there are no signals to ask nicely with). Sessions live on in
