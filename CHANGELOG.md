@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.37] - 2026-11-27
+
+### Added
+
+- **Pop-out windows: any session on its own screen.** Drag a pane's header (or a session's rail row) out of the MindFlock window and let go: the session opens in a window of its own there, like a tab dragged out of a browser, ready to move to another screen. It is also in the session's ⋯ menu, its right-click menu and the palette as **Move to new window**.
+  - **In the new window:** the session's whole pane (every tab, its terminals and queue) under a slim bar with its name, its state and **Back to main window**. It follows the main window's theme. Ctrl/Cmd+W there takes it back; it never ends the session.
+  - **Back:** that button, closing the window, or dragging its handle onto the main grid. It returns to the very spot it left.
+  - **In the main window while it is out:** it takes no grid slot, its row shows ⧉, and selecting it (its row, the palette, a notification) brings its window forward. Its Sky card offers **Show** instead of a second terminal. Notifications still come from the main window only.
+  - **Desktop app:** pop-outs reopen where they were at the next launch. Each pop-out's own minimize, maximize and close buttons act on that window. In a browser, a popup blocker may refuse the window after a drag; a toast then offers **Open in new window**.
+
 ### Changed
 
 - **Out of Fable: new sessions start on Opus.** When a session runs out of one model, MindFlock already switched that session to the next one down. Now it also remembers the model is used up until its reset. Until then, every new session, worker, route step, wake from sleep and restart on that account starts on Opus, without first hitting the limit. A session or account that picked its own model keeps it, and local models are never touched. After the reset, sessions start on Fable again.
@@ -7785,7 +7795,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.36...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.37...HEAD
+[0.14.37]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.37
 [0.14.36]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.36
 [0.14.35]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.35
 [0.14.34]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.34
