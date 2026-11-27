@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent pane stuck 2,048 rows tall.** To make Ctrl+F instant, MindFlock indexes an idle pane in the background by making its window very tall for a moment. If you typed into the pane at the wrong moment, or the server restarted mid-index, the window stayed that tall: the Agent tab then showed a mostly blank pane with the conversation squeezed at the bottom, flickering as the agent redrew, with `[0,2017]` in the tmux status bar. The window is now always put back, and a pane already stuck is fixed when you open it or when the server starts.
+
 ## [0.14.36] - 2026-11-25
 
 ### Changed

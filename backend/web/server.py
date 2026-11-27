@@ -2985,10 +2985,23 @@ def _find_index_tick() -> None:
         )
 
 
+def _find_index_heal_all() -> None:
+    """Once at startup: put back every agent pane an index left tall when the
+    last server stopped in the middle of one (pane_scroll_find.heal)."""
+    for title in list(ENGINE.instances):
+        name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+        if name:
+            _pane_scroll_find.heal(name)
+
+
 async def _find_index_loop() -> None:
     """Drive :func:`_find_index_tick` forever (started by the lifespan)."""
     if not _find_index_loop_enabled():
         return
+    try:
+        await _in_bg_pool(_find_index_heal_all)
+    except Exception:  # noqa: BLE001
+        pass
     while True:
         try:
             await _in_bg_pool(_find_index_tick)
@@ -15340,6 +15353,12 @@ async def _attach_pty(ws: WebSocket, name: str, guest: bool):
     with 1013 and the reason, and the server keeps answering."""
 
     def spawn():
+        # A window a Ctrl+F index left 2048 rows tall would show as a few
+        # flickering rows of it, under a "[0,2017]" offset in the status bar.
+        try:
+            _pane_scroll_find.heal(name)
+        except Exception:  # noqa: BLE001 — never block an attach on it
+            pass
         if guest:
             return _guest_terminal.spawn_readonly_attach(name, 24, 80)
         return mux.attach(name, dimensions=(24, 80))
