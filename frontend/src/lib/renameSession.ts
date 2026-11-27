@@ -28,7 +28,7 @@ import { focusSpot, keepFocusAcrossRename, PANE_TERMINAL } from "./renameFocus";
 import { loadSkyLayout, renameSkyLine, saveSkyLayout, SKY_POS_KEY } from "./skyLayout";
 import { renameNodePos } from "./skyNodePos";
 import { toast } from "./toast";
-import { isPoppedOut, renamePopout } from "./popout";
+import { isPopoutWindow, isPoppedOut, renamePopout } from "./popout";
 
 /** The title-keyed localStorage this moves (key → shape). Listed for a
  * reviewer (the inventory test pins it): a new title-keyed key belongs here
@@ -87,6 +87,10 @@ export function renameMapKey<V>(m: Map<string, V>, from: string, to: string, opt
 }
 
 function persist(key: string, value: unknown): void {
+  // A pop-out window never writes the main window's saved layout: it holds a
+  // copy read at its load, and writing that back would undo the main window's
+  // newer state (lib/popout). The main window moves its own on the same event.
+  if (isPopoutWindow()) return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {

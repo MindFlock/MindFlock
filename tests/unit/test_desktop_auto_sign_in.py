@@ -43,8 +43,12 @@ def test_sign_in_title_matches_the_login_page():
 def test_auto_sign_in_runs_on_every_app_load():
     js = _main_js()
     start = js.index("win.webContents.on('did-finish-load'")
-    handler = js[start : js.index("win.webContents.on(", start + 1)]
+    handler = js[start : js.index("\n  })", start)]
     assert "autoSignIn()" in handler
+    # A pop-out window (one session in a window of its own) that lands on the
+    # sign-in page signs itself in, back to its own page.
+    start = js.index("pw.webContents.on('did-finish-load'")
+    assert "autoSignIn(pw," in js[start : js.index("\n  })", start)]
 
 
 def test_loaded_log_line_never_carries_the_token_query():

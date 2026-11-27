@@ -118,12 +118,13 @@ def test_main_js_pushes_fullscreen_state_on_both_transitions():
     assert m, "sendFullScreen sender is gone"
     sender = m.group(1)
     # Same destroyed-webContents guard as the older sendMax: the events can
-    # arrive while the window is tearing down.
-    assert "win && !win.webContents.isDestroyed()" in sender
-    assert f"win.webContents.send('{_FULLSCREEN_CHANNEL}'" in sender
-    assert "win.isFullScreen()" in sender
+    # arrive while the window is tearing down. Wired per window (wireWindow's
+    # `w`: the main window and every pop-out), each told about its own state.
+    assert "!w.isDestroyed() && !w.webContents.isDestroyed()" in sender
+    assert f"w.webContents.send('{_FULLSCREEN_CHANNEL}'" in sender
+    assert "w.isFullScreen()" in sender
     for event in ("enter-full-screen", "leave-full-screen"):
-        assert f"win.on('{event}', sendFullScreen)" in code, event
+        assert f"w.on('{event}', sendFullScreen)" in code, event
 
 
 def test_fullscreen_channel_name_matches_on_both_sides_of_the_bridge():

@@ -10,6 +10,7 @@ import { queryClient } from "../state/queries";
 import { useUi } from "../state/store";
 import { ruleOn } from "../state/runs";
 import { deriveSessionState, notifyRuleFor } from "./sessionState";
+import { isPopoutWindow } from "./popout";
 
 const BASE_TITLE = document.title || "MindFlock";
 // Sessions that need you (lib/sessionState `inBell`, behind their Settings →
@@ -107,6 +108,9 @@ function updateFavicon(n: number) {
 }
 
 export function updateTitleBadge() {
+  // A pop-out window's title is its session's name (popout/PopoutApp); the
+  // attention count belongs to the main window.
+  if (isPopoutWindow()) return;
   const want = badgeWanted();
   // A session that stopped needing you is handled by definition; re-arm it.
   for (const t of [...attentionUnseen]) if (!want.has(t)) attentionUnseen.delete(t);

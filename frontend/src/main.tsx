@@ -14,8 +14,10 @@ import { installJoinLink } from "./lib/joinLink";
 import { installRepaintTriggers } from "./lib/wsTerm";
 import { isPopoutWindow } from "./lib/popout";
 import { installPopoutWindow } from "./popout/boot";
-import { PopoutApp } from "./popout/PopoutApp";
 import App from "./App";
+// After App: its sheets keep their order in the bundle, the pop-out's own
+// CSS comes after them (docs: CSS order follows imports).
+import { PopoutApp } from "./popout/PopoutApp";
 import "./styles/index.css";
 
 // Expose the bundled xterm as globals: core/ws-xterm.js (the addon-pane

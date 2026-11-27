@@ -177,3 +177,9 @@ body.popout-window {
 .popout-gone .popout-close:hover {
   border-color: var(--accent);
 }
+
+/* The bar above already names the session: the pane's own name in its head
+   would say it twice. Its device tag and chips stay. */
+.popout-body .pane-head > .title {
+  display: none;
+}

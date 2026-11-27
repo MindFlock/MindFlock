@@ -86,3 +86,19 @@ describe("popoutSupported", () => {
     expect(popoutSupported()).toBe(false);
   });
 });
+
+describe("pop-out size", () => {
+  it("never opens smaller than MIN_SIZE, and keeps a bigger pane's size", async () => {
+    const { openPopout, MIN_SIZE } = await import("../lib/popout");
+    const asked: Array<Record<string, unknown>> = [];
+    const mfwin = { open: async (o: Record<string, unknown>) => (asked.push(o), true) };
+    g.location = { search: "", origin: "http://h" };
+    g.window = { mfwin, mfshell: {}, innerWidth: 1440 };
+    // A pane off a nine-pane grid: too small for a window of its own.
+    expect(await openPopout("small", { x: 10, y: 20, width: 380, height: 300 })).toBe(true);
+    expect(asked[0]).toMatchObject({ title: "small", x: 10, y: 20, width: MIN_SIZE.width, height: MIN_SIZE.height });
+    // A big pane keeps its size.
+    await openPopout("big", { width: 1300, height: 820 });
+    expect(asked[1]).toMatchObject({ width: 1300, height: 820 });
+  });
+});

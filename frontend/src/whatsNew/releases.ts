@@ -37,6 +37,24 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.37",
+    date: "2026-11-27",
+    big: true,
+    headline: "Put any session on its own screen.",
+    features: [
+      {
+        title: "Pop-out windows",
+        body:
+          "Drag a session's pane header out of the window, like a browser tab, and it opens in a window of its own that you can put on another screen. Drag it back onto the grid, or press Back to main window, and it returns to the spot it left.",
+      },
+      {
+        title: "Out of one model, on to the next",
+        body:
+          "When a session runs out of Fable, every new session and restart on that account now starts on Opus until Fable is back, instead of hitting the limit first.",
+      },
+    ],
+  },
+  {
     version: "0.14.8",
     date: "2026-11-11",
     big: false,

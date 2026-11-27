@@ -1136,6 +1136,57 @@ pane's under `window-size latest` on every alt-tab: the agent re-rendered and
 the pane jumped around its history. `useWsTerm` now sends a size only when it
 changed on that connection, like the grid panes (`repaintNoResize.test.ts`).
 
+## Pop-out windows
+
+Any session can live in a window of its own, so it can sit on another screen,
+the way a browser tab is dragged out of its window.
+
+- **Out:** drag a pane's header (or its rail row) and let go outside the
+  MindFlock window. The session opens in a new window where you dropped it,
+  at the pane's size (never smaller than 720×520). Or use **Move to new
+  window** in the session's ⋯ menu, its right-click menu, or the palette
+  (Ctrl+K). A drop inside the window is the usual reorder, exactly as before.
+- **In it:** a slim bar (the drag handle ⠿, the session's state dot and name,
+  **Back to main window**) over the session's whole pane: every tab, the
+  terminals, the queue. It follows the main window's theme live.
+  Ctrl/Cmd+W in it means *back to main window*: it never closes or ends the
+  session. Main-window keys (new session, rail cycling, view switches) do
+  nothing there; the pane's own (Ctrl+K chords, find) work.
+- **Back:** **Back to main window**, closing the window, Ctrl/Cmd+W, or
+  dragging its ⠿ onto the main window's grid (it lands where you drop it).
+  Otherwise it returns to the very spot it left: that spot is kept in the
+  saved layout while it is out, and its order and recent use are untouched.
+- **While it is out**, the main window treats it as on screen elsewhere: it
+  takes no grid slot (another session can fill it), its terminals there are
+  released (so tmux is never sized by two windows at once), its rail row
+  shows ⧉ ("In its own window — click to show it"), and selecting it (its row,
+  the palette, a notification, keyboard rail cycling) brings its window to
+  the front. A Sky card for it shows **In its own window — Show** instead of
+  a second terminal. The session menu offers **Back to main window** and
+  **Show its window**.
+- **Renamed or closed:** a rename follows it into its window. When the
+  session is closed or deleted, its window says so and closes itself after a
+  few seconds.
+- **Notifications and toasts** come from the main window only; a pop-out
+  raises none of its own. A pop-out never writes the main window's saved
+  layout (`cs_gridrows`, `cs_mru`, `cs_order`, `mf_hidden`, …: one
+  localStorage holds both windows' copies).
+
+**Desktop app.** The shell's main process owns the windows (`electron/main.js`,
+`electron/popouts.js`; the page's `window.mfwin`, `frontend/src/lib/popout.ts`).
+Each pop-out is frameless like the main window, with its own min/max/close.
+Pop-outs open where they were at the next launch (their places are kept in
+`window-state.json` beside the main window's, and one whose screen is gone
+moves to the nearest), unless you closed them yourself. Closing the main
+window closes them all and quits, as before.
+
+**In a browser** a pop-out is a popup on the same page (`/?popout=<title>`)
+and the two windows keep in touch over a `BroadcastChannel`. A browser does
+not count the end of a drag as a click, so its popup blocker may refuse the
+window: a toast then offers **Open in new window**, which it lets through.
+Pop-outs are off on a phone-width layout, and in a desktop app older than
+this feature (it would send the window to the system browser).
+
 ## Workflow stages and the guided next step
 
 Each session shows a stage badge (sidebar + pane) computed from git, plus a

@@ -37,6 +37,9 @@ export const HEARTBEAT_MS = 2000;
 export const EXPIRE_MS = 6500;
 /** A pop-out's size when the caller gives none (CSS px). */
 export const DEFAULT_SIZE = { width: 900, height: 640 };
+/** Never smaller than this: a pane torn off a nine-pane grid is ~380 px
+ * wide, too cramped for a window of its own. A bigger pane keeps its size. */
+export const MIN_SIZE = { width: 720, height: 520 };
 /** Below this viewport width the app is the phone layout: no pop-outs. */
 const MIN_MAIN_WIDTH = 760;
 
@@ -225,8 +228,8 @@ export function installPopoutRegistry(): () => void {
  * click to a popup blocker, so the caller should offer the menu item then). */
 export async function openPopout(title: string, at: PopoutPlacement = {}): Promise<boolean> {
   if (!title || !popoutSupported()) return false;
-  const width = Math.round(at.width || DEFAULT_SIZE.width);
-  const height = Math.round(at.height || DEFAULT_SIZE.height);
+  const width = Math.round(Math.max(at.width || DEFAULT_SIZE.width, MIN_SIZE.width));
+  const height = Math.round(Math.max(at.height || DEFAULT_SIZE.height, MIN_SIZE.height));
   const b = bridge();
   if (b) {
     try {
@@ -319,8 +322,9 @@ export function popoutName(title: string): string {
 export interface PopoutSelfHandlers {
   /** The main window asked this pop-out to close (browser path). */
   onClose?: () => void;
-  /** The session was renamed: show the new title (browser path; the shell
-   * reloads the window itself). */
+  /** The session was renamed: show the new title (browser path; in the
+   * desktop app the page follows `session.renamed` itself — the shell only
+   * re-keys its window and saved place, it never reloads). */
   onRename?: (to: string) => void;
 }
 
