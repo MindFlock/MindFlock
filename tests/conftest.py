@@ -783,3 +783,17 @@ def _guard_real_repo_worktrees():
             + ", ".join(sorted(leaked)),
             stacklevel=1,
         )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_model_spent(monkeypatch, tmp_path):
+    """Spent models (``providers.model_spent``) live in the real config dir:
+    while the developer's Fable is used up, every launch-command test would
+    grow a ``--model opus``. Each test gets its own empty store."""
+    try:
+        from backend.providers import model_spent
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(
+        model_spent, "_path", lambda: str(tmp_path / "model-spent.json")
+    )

@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Out of Fable: new sessions start on Opus.** When a session runs out of one model, MindFlock already switched that session to the next one down. Now it also remembers the model is used up until its reset. Until then, every new session, worker, route step, wake from sleep and restart on that account starts on Opus, without first hitting the limit. A session or account that picked its own model keeps it, and local models are never touched. After the reset, sessions start on Fable again.
+
 ### Fixed
 
 - **An agent pane stuck 2,048 rows tall.** To make Ctrl+F instant, MindFlock indexes an idle pane in the background by making its window very tall for a moment. If you typed into the pane at the wrong moment, or the server restarted mid-index, the window stayed that tall: the Agent tab then showed a mostly blank pane with the conversation squeezed at the bottom, flickering as the agent redrew, with `[0,2017]` in the tmux status bar. The window is now always put back, and a pane already stuck is fixed when you open it or when the server starts.
+- **A session that only talks about a model limit is no longer switched.** An agent reply that quoted "You've hit your Fable limit", or a command that printed it, read as the real notice, so MindFlock switched an idle session to Opus and told it to carry on. Only Claude Code's own notice counts now: the "⎿  You've hit your …" line.
+- **The reset date in "resets Nov 30, 1am" is read.** Claude Code's current limit notice puts a comma before the time. The notice was still recognized, but its reset time came back unknown, so the "used up until…" toast left out the date.
 
 ## [0.14.36] - 2026-11-25
 

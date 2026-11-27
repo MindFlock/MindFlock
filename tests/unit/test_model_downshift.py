@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -177,6 +178,12 @@ def _quiet(monkeypatch, tmp_path):
         ClaudeProvider, "model_default_file", lambda self, inst=None: default_file
     )
     md._RESTORE.clear()
+    # Never the real ~/.mindflock/model-spent.json either.
+    from backend.providers import model_spent
+
+    monkeypatch.setattr(
+        model_spent, "_path", lambda: str(tmp_path / "model-spent.json")
+    )
     monkeypatch.setattr(md, "SWITCH_SETTLE_S", 0.0)
     monkeypatch.setattr(md, "enabled", lambda: True)
     monkeypatch.setattr(md, "_capture", lambda name: FABLE_SCREEN)
@@ -384,3 +391,147 @@ def test_claudes_default_file_follows_its_config_dir(monkeypatch, tmp_path):
     assert ClaudeProvider().model_default_file() == str(
         tmp_path / "cfg" / "settings.json"
     )
+
+
+# --------------------------------------------------------------------------- #
+# spent models: every launch starts below them until they reset
+# --------------------------------------------------------------------------- #
+from backend.providers import model_spent  # noqa: E402
+
+#: Claude Code 2.1.332 on the laptop (2026-11-26): the reset has a comma, no "at".
+FABLE_COMMA_NOTICE = (
+    "  ⎿  You've hit your Fable limit · resets Nov 30, 1am (America/New_York)\n"
+    "\n────────\n❯ \n────────\n"
+)
+
+
+def test_the_comma_form_of_the_reset_is_read():
+    got = ClaudeProvider().model_limit(FABLE_COMMA_NOTICE, NOW)
+    assert (got["model"], got["next"]) == ("fable", "opus")
+    # 2026-11-30 01:00 America/New_York
+    assert got["reset_at"] == 1_796_018_400.0
+
+
+def _claude():
+    return ClaudeProvider()
+
+
+def test_a_spent_model_starts_launches_on_the_next_one_down(tmp_path):
+    p, key = _claude(), _claude().model_default_file()
+    assert model_spent.launch_args(p, None, (), NOW) == ()
+    model_spent.record(key, "fable", NOW + 3600, NOW)
+    # No default saved: Claude Code starts on its best, Fable.
+    assert model_spent.launch_args(p, None, (), NOW) == ("--model", "opus")
+    # A saved default of Fable (in any spelling) too.
+    Path(key).write_text('{"model": "claude-fable-5-2"}')
+    assert model_spent.launch_args(p, None, (), NOW) == ("--model", "opus")
+    # Opus spent as well: Sonnet.
+    model_spent.record(key, "opus", NOW + 3600, NOW)
+    assert model_spent.launch_args(p, None, (), NOW) == ("--model", "sonnet")
+
+
+def test_a_launch_that_names_its_model_or_defaults_below_is_left_alone(tmp_path):
+    p, key = _claude(), _claude().model_default_file()
+    model_spent.record(key, "fable", NOW + 3600, NOW)
+    assert model_spent.launch_args(p, None, ("--model", "haiku"), NOW) == ()
+    assert model_spent.launch_args(p, None, ("--model=fable",), NOW) == ()
+    Path(key).write_text('{"model": "opus"}')
+    assert model_spent.launch_args(p, None, (), NOW) == ()
+
+
+def test_a_spent_model_is_back_after_its_reset(tmp_path):
+    p, key = _claude(), _claude().model_default_file()
+    model_spent.record(key, "fable", NOW + 3600, NOW)
+    assert model_spent.launch_args(p, None, (), NOW + 3601) == ()
+    # No readable reset: it holds for a while, not forever.
+    model_spent.record(key, "fable", None, NOW)
+    assert model_spent.launch_args(p, None, (), NOW + 3600) == ("--model", "opus")
+    assert (
+        model_spent.launch_args(p, None, (), NOW + model_spent.UNKNOWN_RESET_S + 1)
+        == ()
+    )
+
+
+def test_each_account_has_its_own_allowance(tmp_path):
+    p = _claude()
+    model_spent.record(
+        str(tmp_path / "other" / "settings.json"), "fable", NOW + 3600, NOW
+    )
+    assert model_spent.launch_args(p, None, (), NOW) == ()
+
+
+def test_the_sweep_records_the_spent_model_for_every_launch(monkeypatch):
+    srv = _Srv(_Inst())
+    assert _tick(monkeypatch, srv, [_row()]) == ["w"]
+    key = _claude().model_default_file()
+    # FABLE_SCREEN: "resets Nov 30 at 11pm (America/New_York)"
+    assert model_spent.spent(key, NOW) == {"fable": 1_796_097_600.0}
+    assert model_spent.launch_args(_claude(), None, (), NOW) == ("--model", "opus")
+
+
+def test_a_session_out_of_view_still_teaches_the_launches(monkeypatch):
+    # Someone typing holds the switch, but the notice is still evidence.
+    srv = _Srv(_Inst())
+    srv._HUMAN_INPUT_AT["w"] = NOW
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    assert "fable" in model_spent.spent(_claude().model_default_file(), NOW)
+
+
+def test_every_launch_path_gets_the_step_down(monkeypatch):
+    # profile_overlay is what the first start, a relaunch, a launcher rewrite
+    # and the standalone command all ask for their flags.
+    from backend.providers import launch_script
+
+    model_spent.record(_claude().model_default_file(), "fable", None)
+    assert launch_script.profile_overlay("claude")[1] == ("--model", "opus")
+    _, cmd = launch_script.launch_command("claude")
+    assert "--model opus" in cmd
+    # Other CLIs have no ladder: untouched.
+    assert "--model" not in " ".join(launch_script.profile_overlay("codex")[1])
+
+
+def test_local_models_keep_their_own_model(monkeypatch):
+    from backend.providers import launch_script
+
+    model_spent.record(_claude().model_default_file(), "fable", None)
+    monkeypatch.setattr(
+        launch_script, "local_overlay", lambda program: ({"X": "1"}, ())
+    )
+    assert launch_script.profile_overlay("claude")[1] == ()
+
+
+#: This very session, 2026-11-27: the agent's reply quoted the notice, then
+#: its next command echoed it under a tool call. Neither is the CLI's notice,
+#: and the sweep switched the session anyway.
+QUOTED_SCREEN = """\
+● Yes, switching to Opus when Fable runs out already works. It's been on by default since 0.14.32: a session that gets "You've hit your Fable limit" is
+  switched to Opus and told to carry on with the request that bounced.
+
+● Seeing how the false positive looked on screen
+  ⎿  $ tmux capture-pane -p | grep -n "hit your Fable limit"
+
+────────
+❯ 
+────────
+"""
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        QUOTED_SCREEN,
+        "❯ why did I hit your Fable limit so fast?\n\n────\n❯ \n",
+        "● Done.\n  ⎿  tests: your Fable limit resets Nov 30 at 1am in the fixture\n❯ \n",
+    ],
+    ids=["reply-and-echo", "persons-prompt", "tool-output"],
+)
+def test_words_about_a_limit_are_not_a_limit(screen):
+    assert ClaudeProvider().model_limit(screen, NOW) is None
+
+
+def test_a_quoting_session_is_not_switched(monkeypatch):
+    monkeypatch.setattr(md, "_capture", lambda name: QUOTED_SCREEN)
+    srv = _Srv(_Inst())
+    assert _tick(monkeypatch, srv, [_row()]) == []
+    assert srv.sent == []
+    assert model_spent.spent(_claude().model_default_file(), NOW) == {}
