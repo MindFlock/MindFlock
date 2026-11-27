@@ -15,6 +15,7 @@ import {
 } from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
 import { notePrefWrite } from "../lib/prefs";
+import { isPopoutWindow } from "../lib/popout";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
@@ -89,6 +90,10 @@ function firstRun(key: string): boolean {
  * idle reminders, hints — see lib/prefs.ts PREF_MAP) is mirrored to the
  * server too, so it follows you to your other devices. */
 function save(key: string, value: unknown, stringify = true) {
+  // A pop-out window (lib/popout.ts) shares this localStorage with the main
+  // window: its one-pane layout, MRU and tabs must never land in the main
+  // window's saved grid. It keeps its changes in memory for this load only.
+  if (isPopoutWindow()) return;
   try {
     localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
   } catch {
@@ -100,6 +105,7 @@ function save(key: string, value: unknown, stringify = true) {
 /** Forget one key — "back to the default"; a synced pref is cleared on the
  * server too (an absent key is sent as null). */
 function drop(key: string) {
+  if (isPopoutWindow()) return; // as save(): the main window's to change
   try {
     localStorage.removeItem(key);
   } catch {

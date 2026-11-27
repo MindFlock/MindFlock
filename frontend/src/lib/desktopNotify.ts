@@ -22,6 +22,7 @@ import { openSettings } from "./openSettings";
 import { slotNumber, windowName } from "./windowName";
 import { selectSession } from "./sessionActions";
 import { openAsk } from "./ask";
+import { isPopoutWindow } from "./popout";
 
 interface MfNotify {
   show(o: { title: string; body: string; target: string; version?: string }): Promise<unknown> | void;
@@ -161,12 +162,14 @@ const sessionNotedAt = new Map<string, number>();
 
 /** Raise the OS notification for an event — only in the desktop app, and
  * only while its window isn't the one you're looking at. Returns whether
- * one was shown. */
+ * one was shown. Never from a pop-out window (lib/popout.ts): every window
+ * hears the same events, and the main window is the one that notifies. */
 export function desktopNotify(
   event: string,
   data: Record<string, unknown> | null | undefined,
   env?: { session?: string; new?: string | null }
 ): boolean {
+  if (isPopoutWindow()) return false;
   const b = bridge();
   if (!b) return false;
   if (typeof document !== "undefined" && document.hasFocus()) return false;
@@ -199,6 +202,7 @@ export function openNotifyTarget(target: string): void {
 
 /** Listen for notification clicks (returns the unsubscribe). */
 export function installDesktopNotifyClicks(): () => void {
+  if (isPopoutWindow()) return () => {}; // the main window raised it, and opens it
   const b = bridge();
   if (!b || typeof b.onClick !== "function") return () => {};
   const off = b.onClick((target) => openNotifyTarget(String(target || "")));
