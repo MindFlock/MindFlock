@@ -91,6 +91,7 @@ import { errMsg } from "../../lib/format";
 import { SaveRouteAsk } from "./StopShelf";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
+import { focusPopout, usePopouts } from "../../lib/popout";
 import type { BoxSizeName } from "./FlywayCanvas";
 import { agentMenuItems, pillAimer, useAgentMenu, useChainMenu, type AgentMenuItem } from "./useChainMenu";
 import { ReadyHead } from "./ReadyHead";
@@ -328,6 +329,9 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
   const grab = useRef<{ id: number; sx: number; sy: number; w: number; h: number } | null>(null);
   const [live, setLive] = useState<{ w: number; h: number } | null>(null);
   const cur = live || clampPane(w, h);
+  // In a window of its own (lib/popout): its terminals are THERE — a second
+  // attach here would fight it over the size. A row that goes to it instead.
+  const popped = usePopouts((s) => s.titles.has(inst.title));
   const z = zoom || 1;
 
   const down = (e: ReactPointerEvent<HTMLSpanElement>) => {
@@ -359,7 +363,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
     <div
       className="skl-card sky-own-scroll"
       data-no-drag
-      style={{ width: cur.w, height: cur.h + CARD_HEAD_H }}
+      style={{ width: cur.w, height: popped ? undefined : cur.h + CARD_HEAD_H }}
       // A double-click on the card's top — its own head, or the pane's head
       // under it (not its buttons, tabs or fields) — folds it back into a box.
       onDoubleClick={(e) => {
@@ -376,11 +380,21 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
           ▣
         </button>
       </div>
-      <div className="skl-card-pane" style={{ height: cur.h }}>
-        {/* Keyed by title: a pane open in the grid too keeps its terminal. */}
-        <Pane key={inst.title} inst={inst} embedded />
-      </div>
-      <span
+      {popped ? (
+        <div className="skl-card-popped">
+          <span aria-hidden="true">⧉</span>
+          <span className="skl-card-popped-words">In its own window</span>
+          <button type="button" className="test-btn" onClick={() => focusPopout(inst.title)} title="Bring its window to the front">
+            Show
+          </button>
+        </div>
+      ) : (
+        <div className="skl-card-pane" style={{ height: cur.h }}>
+          {/* Keyed by title: a pane open in the grid too keeps its terminal. */}
+          <Pane key={inst.title} inst={inst} embedded />
+        </div>
+      )}
+      {!popped && <span
         className="skl-resize"
         role="separator"
         tabIndex={0}
@@ -390,7 +404,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
-      />
+      />}
     </div>
   );
 }

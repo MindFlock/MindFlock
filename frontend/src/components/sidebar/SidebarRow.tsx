@@ -48,9 +48,12 @@ import {
   commitSession,
   folderInUseText,
   ideSession,
+  popOutSession,
   rerunSetup,
   selectSession,
 } from "../../lib/sessionActions";
+import { focusPopout, popoutSupported, usePopouts } from "../../lib/popout";
+import { tearOffPlacement } from "../grid/tearOff";
 import { nameTakenBy } from "../../lib/windowName";
 import { renameSession } from "../../lib/renameSession";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
@@ -233,7 +236,7 @@ export const SidebarRow = memo(function SidebarRow({
   inst,
   idx,
   numbered = true,
-  onScreen,
+  onScreen: onScreenHere,
   dropCue,
   onDragState,
   onDropCue,
@@ -280,6 +283,8 @@ export const SidebarRow = memo(function SidebarRow({
   const { data: config } = useConfig();
   const focused = useUi((s) => s.focused);
   const hidden = useUi((s) => s.hidden.has(inst.title));
+  // In a window of its own (lib/popout): on screen — but THERE, not here.
+  const popped = usePopouts((s) => s.titles.has(inst.title));
   // All aliases, not just this row's: the lineage, the worker line, the
   // roll-up and its tooltip name OTHER sessions, and memo would otherwise hold
   // a renamed parent or worker until the next poll.
@@ -425,7 +430,9 @@ export const SidebarRow = memo(function SidebarRow({
   // spawn_session permission prompts land here too, from its very first one,
   // via its playbook), one MindFlock is carrying, and any whose pane is not on
   // screen (nothing else there shows the question). Keys 1–9 press them while
-  // the ROW has focus.
+  // the ROW has focus. A session in its own window (lib/popout) counts as on
+  // screen: that window shows the question.
+  const onScreen = onScreenHere || popped;
   const answering =
     (inFamily(inst, isWorker, kids.length) || shipLane || !onScreen) && activity === "clarify" && !missing && !paused;
   // A question asked in plain words (lib/ask.ts), with its pane off screen:
@@ -465,7 +472,7 @@ export const SidebarRow = memo(function SidebarRow({
     subscribeTermStates,
     useCallback(() => peekTerm(title, "agent")?.state, [title])
   );
-  const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
+  const disconnected = inst.status === "running" && onScreenHere && agentWs === "disconnected";
   // Red-zone chip: breaches / an unseen block (red), a guard that isn't holding
   // (amber), or a shield while it is. "Unseen" is against when this browser last
   // had the Map open for the session — subscribed, so opening the Map clears it
@@ -496,7 +503,7 @@ export const SidebarRow = memo(function SidebarRow({
 
   // The ⋯ menu's verbs come from the session action table — the same rows
   // the palette and the Ctrl+K chords read — grouped by lib/sessionMenu.
-  const ctx = actionCtx(title, { inst, caps, ideName, hidden });
+  const ctx = actionCtx(title, { inst, caps, ideName, hidden, popped });
 
   /** Hang the menu under the ⋮, right edges aligned (the pane header's ⋯
    * popover does the same). */
@@ -581,6 +588,7 @@ export const SidebarRow = memo(function SidebarRow({
     (nest.stem ? " has-stem" : "") +
     (focused === title ? " active" : "") +
     (hidden ? " is-hidden" : "") +
+    (popped ? " is-popped" : "") +
     (missing ? " ws-missing" : "") +
     (pending ? " is-pending" : "") +
     (offlinePeer ? " peer-gone" : "") +
@@ -642,7 +650,16 @@ export const SidebarRow = memo(function SidebarRow({
           title,
           rowDndProps(
             title,
-            { onDragState, onDropCue, onDropRow },
+            {
+              onDragState,
+              onDropCue,
+              onDropRow,
+              // Dragged out of the window: into a window of its own.
+              onTearOff:
+                !pending && !offlinePeer && !missing && !popped && popoutSupported()
+                  ? (pt, grabX) => popOutSession(title, tearOffPlacement(pt, grabX))
+                  : undefined,
+            },
             // Row drag would hijack text selection inside the rename input.
             !editing
           ),
@@ -1183,6 +1200,19 @@ export const SidebarRow = memo(function SidebarRow({
               onClick={(e) => act(() => useUi.getState().openMap(title, zoneChipFocus(inst.redzone, rz)), e)}
             >
               {rz.label}
+            </button>
+          )}
+          {popped && (
+            // In a window of its own (lib/popout): say so, and go there.
+            <button
+              type="button"
+              className="stagechip popchip"
+              title="In its own window — click to show it"
+              aria-label={"In its own window — show " + shown}
+              onClick={(e) => act(() => void focusPopout(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              ⧉
             </button>
           )}
           {!pending && (

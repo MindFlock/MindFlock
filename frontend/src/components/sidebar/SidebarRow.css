@@ -923,6 +923,28 @@
   outline: 1px solid var(--accent);
 }
 
+/* ⧉ — the session is in a window of its own (lib/popout); click goes there. */
+.stagechip.popchip {
+  cursor: pointer;
+  font-size: 11px;
+  padding: var(--ctl-pad-xs);
+  min-height: var(--ctl-h-xs);
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  flex: none !important;
+  display: inline-flex;
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+.stagechip.popchip:hover {
+  filter: brightness(1.15);
+}
+.stagechip.popchip:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
 /* A job the agent backgrounded and left running past its turn
    (lib/backgroundJobs): waiting is quiet, stuck is red; both open the job's
    menu on this device's rows. */

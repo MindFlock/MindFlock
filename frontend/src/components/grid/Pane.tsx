@@ -15,7 +15,7 @@ import { fmtMb, memoryReading, memoryTip, memoryTone, type MemoryTone } from "..
 import { useUi } from "../../state/store";
 import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep, resetStep, withVerifyVerdict } from "../../lib/stage";
-import { cleanupMissing, selectSession } from "../../lib/sessionActions";
+import { cleanupMissing, popOutSession, selectSession } from "../../lib/sessionActions";
 import { sessionLabel } from "../../lib/sessionLabel";
 import {
   focusTerm,
@@ -34,6 +34,8 @@ import { isShown, repaintTerm, trackRepaint } from "../../lib/wsTerm";
 import { toast } from "../../lib/toast";
 import { copyPaneHistory } from "../../lib/paneHistory";
 import { dropSideFor, type DropSide } from "./layout";
+import { popoutSupported } from "../../lib/popout";
+import { tearOffPlacement, trackDrag } from "./tearOff";
 import type { DragCtx } from "./TerminalGrid";
 import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
@@ -653,8 +655,15 @@ function PaneImpl({
     if (tab === "thread") useUi.getState().setThreadLastSeen(title);
   }, [tab, title, newestReport]);
 
-  // Header drag wiring (shared semantics with special panes).
+  // Header drag wiring (shared semantics with special panes). A drag that ends
+  // OUTSIDE the window tears the session off into a window of its own
+  // (grid/tearOff, lib/popout); inside, it is the reorder, unchanged.
   const paneRef = useRef<HTMLElement | null>(null);
+  const tear = useRef<{
+    track: ReturnType<typeof trackDrag>;
+    grabX: number;
+    size: { width: number; height: number };
+  } | null>(null);
   const headDrag = embedded ? {} : {
     draggable: true,
     onDragStart: (ev: React.DragEvent) => {
@@ -666,8 +675,20 @@ function PaneImpl({
       ev.dataTransfer.setData("text/plain", title);
       ev.dataTransfer.effectAllowed = "move";
       drag.start(title);
+      tear.current = null;
+      if (!missing && !inst.pending && popoutSupported() && paneRef.current) {
+        const r = paneRef.current.getBoundingClientRect();
+        tear.current = { track: trackDrag(), grabX: ev.clientX - r.left, size: { width: r.width, height: r.height } };
+      }
     },
-    onDragEnd: () => drag.end(),
+    onDragEnd: (ev: React.DragEvent) => {
+      drag.end();
+      const t = tear.current;
+      tear.current = null;
+      if (!t) return;
+      const out = t.track.end({ dropEffect: ev.dataTransfer.dropEffect, screenX: ev.screenX, screenY: ev.screenY });
+      if (out) popOutSession(title, tearOffPlacement(out, t.grabX, t.size));
+    },
   };
   const paneDrag = embedded ? {} : {
     onDragOver: (ev: React.DragEvent) => {

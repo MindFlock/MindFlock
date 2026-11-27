@@ -7,7 +7,18 @@
 import { isMemoryCancel, withMemoryConfirm } from "./memoryConfirm";
 import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
-import { computeVisibleSlots } from "../components/grid/layout";
+import { computeVisibleSlots, placeInGrid, type DropSide } from "../components/grid/layout";
+import {
+  closePopout,
+  focusMainWindow,
+  focusPopout,
+  isPoppedOut,
+  openPopout,
+  poppedOut,
+  popoutSupported,
+  usePopouts,
+  type PopoutPlacement,
+} from "./popout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { landPendingRow, markMoving, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
@@ -56,6 +67,15 @@ export function selectSession(title: string | null, opts?: { noKeyboard?: boolea
     ui.setFocused(null);
     return;
   }
+  // In a window of its own (lib/popout): bring THAT window forward. It is on
+  // screen there, so nothing here changes — not the hidden set (it would not
+  // come into the grid anyway), not the MRU, not the focus (the grid would
+  // only hand that straight back to a pane it shows).
+  if (isPoppedOut(title)) {
+    focusPopout(title);
+    if (opts?.voice) ui.pulseRail(title);
+    return;
+  }
   ui.setHidden(title, false);
   // Visibility is judged over the UNION the grid actually renders — sessions
   // AND open windows, one cap, one MRU (computeVisibleSlots, exactly as
@@ -75,6 +95,7 @@ export function selectSession(title: string | null, opts?: { noKeyboard?: boolea
     viewMode: effectiveViewMode(ui),
     mru: ui.mru,
     order: ui.order,
+    poppedOut: poppedOut(),
   });
   const focused = ui.focused;
   if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
@@ -93,6 +114,69 @@ export function selectSession(title: string | null, opts?: { noKeyboard?: boolea
 // The store's own actions that bring a session forward (threadOpen) go through
 // this function too, so there is one selection rule, not a second copy of it.
 setSessionSelector(selectSession);
+
+/** Move a session into a window of its own (lib/popout): "Move to new window"
+ * and a drag that ends outside the main window. Without `at`, the new window
+ * opens over the session's pane when it has one (same place, same size).
+ *
+ * A browser counts a drag's end as no click, so its popup blocker may refuse
+ * the window then: the toast's button tries again — a click it lets through. */
+export function popOutSession(title: string, at?: PopoutPlacement) {
+  if (!title || isPoppedOut(title)) {
+    if (title) focusPopout(title);
+    return;
+  }
+  const place = at ?? paneScreenRect(title);
+  void openPopout(title, place).then((ok) => {
+    if (ok || !popoutSupported()) return;
+    toast("Your browser blocked the new window", {
+      duration: 8000,
+      action: {
+        label: "Open in new window",
+        ariaLabel: "Open " + displayName(title) + " in a new window",
+        onClick: () =>
+          void openPopout(title, place).then((again) => {
+            if (!again) errorPop("Couldn’t open a new window", "Allow pop-ups for this site, then try again.");
+          }),
+      },
+    });
+  });
+}
+
+/** The session's pane as a pop-out placement: its place on the SCREEN and
+ * its size, so the new window opens right over it. Empty when it has none. */
+function paneScreenRect(title: string): PopoutPlacement {
+  if (typeof document === "undefined") return {};
+  const pane = [...document.querySelectorAll<HTMLElement>("#grid .pane[data-title]")].find(
+    (el) => el.dataset.title === title
+  );
+  if (!pane) return {};
+  const r = pane.getBoundingClientRect();
+  // The page's top-left on the screen: the window's, past its own frame.
+  const chromeY = Math.max(0, window.outerHeight - window.innerHeight);
+  return {
+    x: window.screenX + r.left,
+    y: window.screenY + chromeY + r.top,
+    width: r.width,
+    height: r.height,
+  };
+}
+
+/** Bring a popped-out session back into the main window: its window closes,
+ * it takes the grid spot it left (or `place`, a drop beside another pane),
+ * and it is selected. The popped-out set is updated here at once, not when
+ * the shell next says so, so the selection lands on the grid — not on the
+ * window that is closing. */
+export function dockSession(title: string, place?: { target: string; side: DropSide }) {
+  if (!title) return;
+  closePopout(title);
+  if (isPoppedOut(title)) usePopouts.getState().set([...poppedOut()].filter((t) => t !== title));
+  const ui = useUi.getState();
+  if (place?.target && place.target !== title)
+    ui.setGridRows(placeInGrid(ui.gridRows, title, place.target, place.side));
+  focusMainWindow();
+  selectSession(title);
+}
 
 /** Select a non-session window by its grid sentinel: top of the MRU, so a
  * capped view ("1", "2", "4") gives it a slot — the same thing selecting a

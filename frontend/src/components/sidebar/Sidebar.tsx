@@ -59,6 +59,7 @@ import { hideFoldedFamilies } from "../../lib/familyFold";
 import { useRuns } from "../../state/runs";
 import { OwnHeader, QueuedRow, RunGroupHeader } from "./RunGroupHeader";
 import { computeVisible } from "../grid/layout";
+import { usePoppedOut } from "../../lib/popout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
 import { Hint } from "../onboarding/Hint";
@@ -364,6 +365,9 @@ export function Sidebar({ onOpenChat }: Props) {
       (k) => parentOf.get(k)
     );
   }, [allRows, windows, order]);
+  // A session in a window of its own is not on screen HERE (its row says
+  // where it is instead — SidebarRow's ⧉).
+  const popped = usePoppedOut();
   const onScreen = useMemo(
     () =>
       new Set(
@@ -372,9 +376,10 @@ export function Sidebar({ onOpenChat }: Props) {
           viewMode: effectiveViewMode(ui),
           mru: ui.mru,
           order: ui.order,
+          poppedOut: popped,
         }).map((i) => i.title)
       ),
-    [instances, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
+    [instances, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order, popped]
   );
 
   // Device grouping: only when other MindFlock devices exist on the tailnet,
