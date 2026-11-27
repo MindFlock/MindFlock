@@ -476,25 +476,75 @@ def _run_to_end(p: _Pane, up: bool, deadline: float) -> list[str]:
 
 def _go_tall(p: _Pane, normal_h: int, bottom: list[str]) -> Optional[int]:
     """Make the window as tall as the app will draw. Returns the height, or
-    None when it redraws at none of them (index at the normal height)."""
-    for h in TALL_TRY:
-        if h <= normal_h:
-            break
-        p.resize(h)
-        if p.h != h:
-            continue
-        # A resize is taken up in stages (tmux reflows, the app redraws, and
-        # Claude Code keeps paging by its OLD height for a beat), so wait for
-        # real calm, not the first frame.
-        scr = p.settle(bottom, wait=0.6, calm=8)
-        # Redrawn at the new height: its bottom chrome moved to the new
-        # bottom. An app that ignored the resize left it where it was and
-        # tmux padded the rest with blank rows.
-        low = max((i for i, r in enumerate(scr) if r.strip()), default=-1)
-        if low >= h - MAX_CHROME:
-            return h
+    None when it redraws at none of them (index at the normal height).
+
+    The callers put the window back in a ``finally`` that only starts once
+    this returns, so anything raised in here (a person typing cancels the
+    wait) puts it back first: a window left 2048 rows tall with tmux's
+    ``window-size`` at manual is what everyone attaching afterwards sees,
+    a few rows of it at a time, flickering as the app redraws."""
+    try:
+        for h in TALL_TRY:
+            if h <= normal_h:
+                break
+            p.resize(h)
+            if p.h != h:
+                continue
+            # A resize is taken up in stages (tmux reflows, the app redraws,
+            # and Claude Code keeps paging by its OLD height for a beat), so
+            # wait for real calm, not the first frame.
+            scr = p.settle(bottom, wait=0.6, calm=8)
+            # Redrawn at the new height: its bottom chrome moved to the new
+            # bottom. An app that ignored the resize left it where it was and
+            # tmux padded the rest with blank rows.
+            low = max((i for i, r in enumerate(scr) if r.strip()), default=-1)
+            if low >= h - MAX_CHROME:
+                return h
+    except BaseException:
+        p.restore(normal_h)
+        raise
     p.restore(normal_h)
     return None
+
+
+def heal(name: str) -> bool:
+    """Put back a window an index left tall: ``window-size`` manual at one of
+    the index heights, and no index running on it now. That happens when the
+    server stops mid-index (a restart, a crash), and before the fix in
+    :func:`_go_tall`, when a cancel landed while it was going tall. Returns
+    True when it put one back.
+
+    With a screen attached, ``window-size latest`` alone resizes the window
+    to it; with none, it goes to tmux's default height until one attaches."""
+    st = _states.get(name)
+    if st is not None and st.lock.locked():
+        return False  # an index is running: tall on purpose
+    out = _tmux(
+        "display-message",
+        "-p",
+        "-t",
+        name,
+        "#{window_height}\t#{session_attached}",
+    )
+    try:
+        wh, attached = out.stdout.strip().split("\t")
+        wh_i, attached_i = int(wh), int(attached)
+    except ValueError:
+        return False
+    if out.returncode != 0 or wh_i not in TALL_TRY:
+        return False
+    size = _tmux("show-options", "-wv", "-t", name, "window-size")
+    if size.returncode != 0 or size.stdout.strip() != "manual":
+        return False
+    if not attached_i:
+        dflt = _tmux("show-options", "-gv", "default-size").stdout.strip()
+        try:
+            h = int(dflt.split("x")[1])
+        except (IndexError, ValueError):
+            h = 24
+        _tmux("resize-window", "-t", name, "-y", str(h))
+    _tmux("set-option", "-w", "-t", name, "window-size", "latest")
+    return True
 
 
 def _to_bottom(p: _Pane, deadline: float) -> list[str]:
@@ -699,6 +749,10 @@ def _index(p: _Pane, st: Optional[_State], _again: bool = True) -> _Index:
 
 def _index_once(p: _Pane, st: Optional[_State]) -> _Index:
     deadline = time.monotonic() + INDEX_BUDGET_S
+    # A window an earlier index left tall would otherwise be its "normal"
+    # height, and every index after would put it back to 2048.
+    if heal(p.name):
+        p.grabbed()
     normal_h = p.win_h or p.h
     # Still for a moment first: an app re-wrapping after a width change
     # redraws in bursts, and an index taken through that is of a layout that

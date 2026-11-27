@@ -421,3 +421,60 @@ def test_human_input_cancels_a_background_index(tui):
     assert f"line {N_LINES - 1}:" in "\n".join(
         _screen(tmux, name)
     )  # back at the bottom
+
+
+def _size(tmux, name):
+    out = subprocess.run(
+        [*tmux, "display-message", "-p", "-t", name, "#{window_height}"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    opt = subprocess.run(
+        [*tmux, "show-options", "-wv", "-t", name, "window-size"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return out, opt
+
+
+@needs_tmux
+def test_a_cancel_while_going_tall_puts_the_window_back(tui, monkeypatch):
+    # The leak behind a pane stuck 2048 rows tall (sitecheck-bot, 2026-11-27):
+    # a person typed while the index waited for the app to redraw at the
+    # tall height, and the cancel escaped before the caller's finally began.
+    start, tmux = tui
+    name = start(**APPS["keys"])
+    real = sf._Pane.resize
+
+    def resize_then_cancel(self, h):
+        real(self, h)
+        self.cancel.set()
+
+    monkeypatch.setattr(sf._Pane, "resize", resize_then_cancel)
+    assert sf.background_index(name, lambda on: None) is False
+    assert _size(tmux, name) == ("24", "latest")
+
+
+@needs_tmux
+def test_heal_puts_back_a_window_left_tall(tui):
+    start, tmux = tui
+    name = start(**APPS["keys"])
+    subprocess.run([*tmux, "resize-window", "-t", name, "-y", "2048"], check=True)
+    assert _size(tmux, name) == ("2048", "manual")
+    assert sf.heal(name) is True
+    assert _size(tmux, name) == ("24", "latest")
+    assert sf.heal(name) is False  # nothing left to do
+
+
+@needs_tmux
+def test_heal_leaves_other_sizes_and_running_indexes_alone(tui):
+    start, tmux = tui
+    name = start(**APPS["keys"])
+    subprocess.run([*tmux, "resize-window", "-t", name, "-y", "50"], check=True)
+    assert sf.heal(name) is False  # someone's own manual size
+    assert _size(tmux, name) == ("50", "manual")
+    subprocess.run([*tmux, "resize-window", "-t", name, "-y", "2048"], check=True)
+    st = sf._state(name)
+    with st.lock:  # an index is running: tall on purpose
+        assert sf.heal(name) is False
+    assert _size(tmux, name) == ("2048", "manual")
